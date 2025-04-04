@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def prepare_data(input_path: str, output_path: str):
-    logger.info("Preparing data...")
+    logger.debug("Preparing data...")
 
     df = pd.read_csv(input_path)
     print(df.info())
