@@ -18,9 +18,13 @@ class NetworkFlowDataset(Dataset):
         self.df = df.copy()
         self.numeric_columns = numeric_columns
         self.categorical_columns = categorical_columns
+        self.cat_encoders = {}
+        self.cat_dims = {}
+
 
         # Gestione dei valori mancanti (se necessario)
-        self.df = self.df.dropna(subset=numeric_columns + [target_column])
+        self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        self.df.dropna(subset=numeric_columns, inplace=True)
 
         # Normalizzazione delle feature numeriche
         if scaler is None:
@@ -32,18 +36,18 @@ class NetworkFlowDataset(Dataset):
 
         # Codifica delle feature categoriali
         self.encoders = {}
+        self.cat_dims = {}
         for col in categorical_columns:
-            if encoders is None or col not in encoders:
-                le = LabelEncoder()
-                self.df[col] = le.fit_transform(self.df[col].astype(str))
-                self.encoders[col] = le
-            else:
-                self.df[col] = encoders[col].transform(self.df[col].astype(str))
-                self.encoders[col] = encoders[col]
+            le = LabelEncoder()
+            self.df[col] = le.fit_transform(self.df[col].astype(str))
+            self.cat_encoders[col] = le
+            self.cat_dims[col] = self.df[col].nunique()
 
         # Target: assumiamo che "Label" sia la colonna target
-        self.targets = torch.tensor(self.df[target_column].values, dtype=torch.long)
-        self.numeric_data = torch.tensor(self.df[numeric_columns].values, dtype=torch.float32)
+        self.X = torch.tensor(self.df[numeric_columns + categorical_columns].values, dtype=torch.float32)
+        self.y = torch.tensor(self.df[target_column].values, dtype=torch.float32)
+        #self.targets = torch.tensor(self.df[target_column].values, dtype=torch.long)
+        #self.numeric_data = torch.tensor(self.df[numeric_columns].values, dtype=torch.float32)
 
         # Elaborazione delle feature categoriali: salviamo ciascuna come tensore
         self.categorical_data = {}
@@ -54,12 +58,12 @@ class NetworkFlowDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        numeric_features = self.numeric_data[idx]  # tensor di dimensione [num_numeric]
-        cat_features = {col: self.categorical_data[col][idx] for col in self.categorical_columns}
-        target = self.targets[idx]
-        return numeric_features, cat_features, target
+        numeric_features = self.X[idx].clone().detach().float()
+        cat_features = {col: self.categorical_data[col][idx].clone().detach().long() for col in self.categorical_columns}
+        y = self.y[idx].clone().detach().long()
+        return numeric_features, cat_features, y
 
-def load_dataset(config_path="dataset.json", csv_path="resources/datasets/NF-UNSW-NB15-v3.csv"):
+def load_dataset(config_path="config/dataset.json", csv_path="resources/datasets/NF-UNSW-NB15-v3.csv"):
     """
     Carica il file di configurazione JSON e il file CSV del dataset reale.
     Restituisce:

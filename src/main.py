@@ -27,7 +27,7 @@ if __name__ == "__main__":
             "The input path for the data.",
             "The output path for the prepared data.",
         ],
-        defaults=["resources/datasets/dataset.csv", None],
+        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", None],
     )
 
     args = parser.parse_arguments(sys.argv[1:])

@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -56,17 +57,7 @@ if __name__ == "__main__":
     # Esempio di utilizzo:
     numeric_dim = 38  # Assicurati che corrisponda al numero di feature numeriche nel tuo dataset
     categorical_info = {
-        "L4_SRC_PORT": (65536, 8),
-        "L4_DST_PORT": (65536, 8),
-        "PROTOCOL": (10, 4),
-        "L7_PROTO": (20, 4),
-        "TCP_FLAGS": (64, 4),
-        "CLIENT_TCP_FLAGS": (64, 4),
-        "SERVER_TCP_FLAGS": (64, 4),
-        "ICMP_TYPE": (10, 3),
-        "ICMP_IPV4_TYPE": (10, 3),
-        "DNS_QUERY_ID": (1000, 4),
-        "DNS_QUERY_TYPE": (50, 3)
+        f"cat_{i}": (np.random.randint(5, 1000), 4) for i in range(10)
     }
     model = NetworkTrafficCNN(numeric_dim=numeric_dim, categorical_info=categorical_info)
     dummy_numeric = torch.rand((10, numeric_dim))
