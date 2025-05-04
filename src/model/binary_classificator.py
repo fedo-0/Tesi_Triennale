@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 
 class NetworkTrafficCNN(nn.Module):
-    def __init__(self, numeric_dim, categorical_info, conv_channels=64, kernel_size=5, fc_dim=128):
+    def __init__(self, numeric_dim, categorical_info, conv_channels=64, kernel_size=5, fc_dim=128, dropout=0.3):
         """
         Enhanced CNN model for network traffic classification.
         
@@ -42,10 +42,10 @@ class NetworkTrafficCNN(nn.Module):
         self.pool = nn.AdaptiveMaxPool1d(1)
         
         # Fully connected layers with dropout for regularization
-        self.dropout1 = nn.Dropout(0.3)
+        self.dropout1 = nn.Dropout(dropout)
         self.fc1 = nn.Linear(conv_channels*2, fc_dim)
         self.bn3 = nn.BatchNorm1d(fc_dim)
-        self.dropout2 = nn.Dropout(0.3)
+        self.dropout2 = nn.Dropout(dropout)
         self.fc2 = nn.Linear(fc_dim, fc_dim // 2)
         self.bn4 = nn.BatchNorm1d(fc_dim // 2)
         self.fc3 = nn.Linear(fc_dim // 2, 2)  # Binary classification: 2 classes
@@ -61,7 +61,6 @@ class NetworkTrafficCNN(nn.Module):
         Returns:
             logits: Tensor of shape [batch_size, 2] for binary classification
         """
-        print(f"Expected total input dim: {self.total_input_dim}")
         # Process categorical features through embeddings
         embed_list = []
         for col in self.categorical_info.keys():
@@ -74,13 +73,11 @@ class NetworkTrafficCNN(nn.Module):
             x = torch.cat([numeric_features, cat_features], dim=1)  # [batch_size, total_input_dim]
         else:
             x = numeric_features
-
-        print(">> numeric shape:", numeric_features.shape)
-        print(">> cat_features shape:", cat_features.shape if embed_list else "No cat features")
-        print(">> Total input shape (after concat):", x.shape)
-        print(">> Expected input dim for BatchNorm:", self.total_input_dim)
-
-            
+        
+        # Verifica dinamica delle dimensioni
+        if x.size(1) != self.total_input_dim:
+            raise ValueError(f"Input dimension mismatch: got {x.size(1)}, expected {self.total_input_dim}")
+                
         # Apply batch normalization to input
         x = self.input_bn(x)
         

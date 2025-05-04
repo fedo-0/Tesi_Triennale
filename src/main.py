@@ -18,11 +18,16 @@ def prepare_data(input_path: str, output_path: str):
     df = pd.read_csv(input_path)
     print(df.info())
 
-def run_binclassifier (input_path: str):
+def run_binclassifier (input_path: str, model_size: str):
     print(">> prepare_data() chiamata")
     logger.info("Running the binary classifier...")
-    run_training_pipeline(config_path = "config/dataset.json", csv_path = input_path,
-                          outputModel_path="output/models/", outputResults_path="output/results/")
+    run_training_pipeline(
+        config_path = "config/dataset.json", 
+        csv_path = input_path,
+        outputModel_path="models/", 
+        outputResults_path="results/",
+        model_size=model_size
+    )
 
 
 if __name__ == "__main__":
@@ -38,12 +43,12 @@ if __name__ == "__main__":
         defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", None],
     ).register_subcommand(
         subcommand="binclassifier",
-        arguments=["--input", "--output"],
+        arguments=["--input", "--model-size"],
         helps=[
             "The input path for the data.",
-            "The output path for the prepared data.",
+            "The model size: small, medium, or large.",
         ],
-        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", None],
+        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "small"],
     )
 
     args = parser.parse_arguments(sys.argv[1:])
@@ -52,4 +57,4 @@ if __name__ == "__main__":
     if args.subcommand == "prepare":
         prepare_data(args.input, args.output)
     elif args.subcommand == "binclassifier":
-        run_binclassifier(args.input)
+        run_binclassifier(args.input, args.model_size)
