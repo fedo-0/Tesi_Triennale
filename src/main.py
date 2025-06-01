@@ -6,8 +6,8 @@ import pandas as pd
 
 from utilities.logging_config import setup_logging
 from utilities.argument_parser import ArgumentParser
-from trainer.train import run_training_pipeline
 from data.outlier_stat import compare_outlier_impact_table
+from data.preprocessing import preprocess_dataset
 
 import numpy as np
 
@@ -131,12 +131,11 @@ def count_outliers(df, threshold=1.5):
 
 def prepare_data(input_path: str, output_path: str):
     logger.info("Preparing data...")
-
     df = pd.read_csv(input_path)
 
+    """
     logger.info(f"Numero totale di righe: {len(df)}")
     logger.info("Risultati dell'analisi degli outlier:")
-    
     all_cols = [
         "IN_BYTES", "OUT_BYTES", "IN_PKTS", "OUT_PKTS",
         "FLOW_DURATION_MILLISECONDS", "DURATION_IN", "DURATION_OUT",
@@ -153,20 +152,28 @@ def prepare_data(input_path: str, output_path: str):
         "SRC_TO_DST_IAT_STDDEV", "DST_TO_SRC_IAT_MIN", "DST_TO_SRC_IAT_MAX",
         "DST_TO_SRC_IAT_AVG", "DST_TO_SRC_IAT_STDDEV"
     ]
-
-
     table = compare_outlier_impact_table(df, all_cols)
+    """
+    try:
+        # esecuzione del preprocessing
+        df_preprocessed, scaler = preprocess_dataset(
+            dataset_path=input_path,
+            config_path="config/dataset.json",
+            output_path=output_path
+        )
+        
+        logger.info("✅ Preprocessing completato con successo!")
+        
+    except FileNotFoundError as e:
+        logger.info(f"❌ Errore: File non trovato - {e}")
+    except ValueError as e:
+        logger.info(f"❌ Errore nei dati: {e}")
+    except Exception as e:
+        logger.info(f"❌ Errore imprevisto: {e}")
 
 def run_binclassifier (input_path: str, model_size: str):
     print(">> prepare_data() chiamata")
     logger.info("Running the binary classifier...")
-    run_training_pipeline(
-        config_path = "config/dataset.json", 
-        csv_path = input_path,
-        outputModel_path="models/", 
-        outputResults_path="results/",
-        model_size=model_size
-    )
 
 
 if __name__ == "__main__":
@@ -179,7 +186,7 @@ if __name__ == "__main__":
             "The input path for the data.",
             "The output path for the prepared data.",
         ],
-        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", None],
+        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets/preprocessed_dataset.csv"],
     ).register_subcommand(
         subcommand="binclassifier",
         arguments=["--input", "--model-size"],
@@ -192,8 +199,7 @@ if __name__ == "__main__":
 
     args = parser.parse_arguments(sys.argv[1:])
 
-    print(f">>> subcommand selezionato: {args}")
     if args.subcommand == "prepare":
         prepare_data(args.input, args.output)
-    elif args.subcommand == "binclassifier":
-        run_binclassifier(args.input, args.model_size)
+    # elif args.subcommand == "binclassifier":
+    #    run_binclassifier(args.input, args.model_size)

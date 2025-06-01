@@ -1,158 +1,157 @@
-import json
 import pandas as pd
 import numpy as np
-import torch
-from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+import json
+from sklearn.preprocessing import MinMaxScaler
 
-class NetworkFlowDataset(Dataset):
-    def __init__(self, df, numeric_columns, categorical_columns, target_column, scaler=None, encoders=None, balance_classes=False):
-        """
-        df: DataFrame contenente i dati.
-        numeric_columns: lista dei nomi delle colonne numeriche.
-        categorical_columns: lista delle colonne categoriali.
-        target_column: nome della colonna target (es. "Label").
-        scaler: scaler addestrato (se disponibile) per le feature numeriche.
-        encoders: dizionario di encoder (se già addestrati) per le feature categoriali.
-        balance_classes: se True, bilancia le classi mediante undersampling della classe maggioritaria
-        """
-        self.df = df.copy()
-        self.numeric_columns = numeric_columns
-        self.categorical_columns = categorical_columns
-        self.target_column = target_column
-        self.cat_encoders = {}
-        self.cat_dims = {}
+# carica la lista delle feature divise per tipo
+def load_dataset_config(config_path="config/dataset.json"):
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config['dataset']
 
-        # Gestione dei valori mancanti (più robusta)
-        self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        # Invece di rimuovere righe, imputa con la mediana per colonne numeriche
-        for col in numeric_columns:
-            if self.df[col].isna().any():
-                median_val = self.df[col].median()
-                self.df[col].fillna(median_val, inplace=True)
-
-        # Verifica della presenza di tutte le colonne necessarie
-        missing_cols = set(numeric_columns + categorical_columns + [target_column]) - set(self.df.columns)
-        if missing_cols:
-            raise ValueError(f"Colonne mancanti nel dataset: {missing_cols}")
-
-        # Normalizzazione delle feature numeriche
-        if scaler is None:
-            self.scaler = StandardScaler()
-            self.df[numeric_columns] = self.scaler.fit_transform(self.df[numeric_columns])
-        else:
-            self.scaler = scaler
-            self.df[numeric_columns] = self.scaler.transform(self.df[numeric_columns])
-
-        # Codifica delle feature categoriali
-        self.encoders = encoders or {}
-        self.cat_dims = {}
-        for col in categorical_columns:
-            if col not in self.encoders:
-                le = LabelEncoder()
-                self.df[col] = le.fit_transform(self.df[col].astype(str))
-                self.encoders[col] = le
-            else:
-                # Gestisce nuove categorie usando un valore di default
-                self.df[col] = self.df[col].astype(str)
-                # Mappa usando un dizionario per gestire valori sconosciuti
-                mapping_dict = {val: idx for idx, val in enumerate(self.encoders[col].classes_)}
-                self.df[col] = self.df[col].map(lambda x: mapping_dict.get(x, -1))  # -1 per valori sconosciuti
-                # Sostituisce -1 con un valore casuale o il più frequente
-                if (self.df[col] == -1).any():
-                    most_common = self.df[col][self.df[col] != -1].mode()[0]
-                    self.df.loc[self.df[col] == -1, col] = most_common
-            
-            self.cat_dims[col] = len(self.encoders[col].classes_)
-
-        # Bilanciamento delle classi (opzionale)
-        if balance_classes:
-            self._balance_classes()
-
-        # Preparazione dei dati
-        self.X_numeric = torch.tensor(self.df[numeric_columns].values, dtype=torch.float32)
-        self.categorical_data = {col: torch.tensor(self.df[col].values, dtype=torch.long) 
-                                for col in categorical_columns}
-        self.y = torch.tensor(self.df[target_column].values, dtype=torch.long)
-
-    def _balance_classes(self):
-        """Bilancia le classi tramite undersampling della classe maggioritaria"""
-        class_counts = self.df[self.target_column].value_counts()
-        min_class_count = class_counts.min()
-        
-        balanced_df = pd.DataFrame()
-        for class_val, count in class_counts.items():
-            class_df = self.df[self.df[self.target_column] == class_val]
-            if count > min_class_count:
-                class_df = class_df.sample(min_class_count, random_state=42)
-            balanced_df = pd.concat([balanced_df, class_df])
-        
-        self.df = balanced_df.reset_index(drop=True)
-        print(f"Dataset bilanciato: {self.df[self.target_column].value_counts().to_dict()}")
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, idx):
-        """Restituisce le feature in maniera più efficiente"""
-        numeric_features = self.X_numeric[idx]
-        cat_features = {col: self.categorical_data[col][idx] for col in self.categorical_columns}
-        y = self.y[idx]
-        return numeric_features, cat_features, y
+def frequency_encoding(df, categorical_columns):
+    df_encoded = df.copy()
     
-    def get_categorical_info(self):
-        """Restituisce un dizionario con informazioni sulle feature categoriali"""
-        return {col: (self.cat_dims[col], 
-                min(16, self.cat_dims[col] // 2) if self.cat_dims[col] > 100 else 
-                min(8, self.cat_dims[col] // 2 if self.cat_dims[col] > 2 else 2))
-                for col in self.categorical_columns}
+    for col in categorical_columns:
+        if col in df_encoded.columns:
+            # Calcola le frequenze per ogni valore nella colonna
+            freq_map = df_encoded[col].value_counts().to_dict()
+            # Sostituisce i valori con le loro frequenze
+            df_encoded[col] = df_encoded[col].map(freq_map)
+            print(f"Frequency encoding applicato alla colonna: {col}")
+        else:
+            print(f"Attenzione: colonna {col} non trovata nel dataset")
+    
+    return df_encoded
 
-def load_dataset(config_path="config/dataset.json", csv_path="resources/datasets/NF-UNSW-NB15-v3.csv"):
+def log1p_transform(df, numeric_columns):
+    df_transformed = df.copy()
+    
+    for col in numeric_columns:
+        if col in df_transformed.columns:
+            # Applica log1p solo a valori non negativi, tutti i negativi vengono trasormati in 0
+            df_transformed[col] = np.log1p(df_transformed[col].clip(lower=0))
+            print(f"Trasformazione log1p applicata alla colonna: {col}")
+        else:
+            print(f"Attenzione: colonna {col} non trovata nel dataset")
+    
+    return df_transformed
+
+def minmax_scaling(df, numeric_columns):
+    df_scaled = df.copy()
+    scaler = MinMaxScaler()
+    
+    # Seleziona solo le colonne numeriche presenti nel dataset
+    numeric_cols_present = [col for col in numeric_columns if col in df_scaled.columns]
+    
+    if numeric_cols_present:
+        # Applica MinMax scaling
+        df_scaled[numeric_cols_present] = scaler.fit_transform(df_scaled[numeric_cols_present])
+        print(f"MinMax scaling applicato a {len(numeric_cols_present)} colonne numeriche")
+    
+    return df_scaled, scaler
+
+def preprocess_dataset(dataset_path, config_path, output_path):
+    # Carica la configurazione
+    config = load_dataset_config(config_path)
+    numeric_columns = config['numeric_columns']
+    categorical_columns = config['categorical_columns']
+    target_column = config['target_column']
+    
+    print(f"Configurazione caricata:")
+    print(f"- Colonne numeriche: {len(numeric_columns)}")
+    print(f"- Colonne categoriche: {len(categorical_columns)}")
+    print(f"- Colonna target: {target_column}")
+    
+    # Carica il dataset
+    print(f"\nCaricamento dataset da: {dataset_path}")
+    df = pd.read_csv(dataset_path)
+    print(f"Dataset originale: {df.shape[0]} righe, {df.shape[1]} colonne")
+
+    """ 
+    # Rimuovi righe con valori NaN
+    initial_rows = len(df)
+    df = df.dropna()
+    removed_rows = initial_rows - len(df)
+    print(f"Rimosse {removed_rows} righe contenenti valori NaN")
+    print(f"Dataset dopo rimozione NaN: {df.shape[0]} righe, {df.shape[1]} colonne")
     """
-    Carica il file di configurazione JSON e il file CSV del dataset reale.
-    Restituisce:
-      - df: il DataFrame con i dati
-      - numeric_columns: lista di colonne numeriche
-      - categorical_columns: lista di colonne categoriali
-      - target_column: nome della colonna target
-    """
-    # Caricamento della configurazione dal file JSON
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        dataset_config = config["dataset"]
-        numeric_columns = dataset_config["numeric_columns"]
-        categorical_columns = dataset_config["categorical_columns"]
-        target_column = dataset_config["target_column"]
-    except Exception as e:
-        raise ValueError(f"Errore nel caricamento della configurazione: {e}")
+######## START ##########
 
-    # Carica il dataset dal file CSV
-    try:
-        df = pd.read_csv(csv_path)
-        
-        # Verifica presenza colonne
-        missing_cols = set(numeric_columns + categorical_columns + [target_column]) - set(df.columns)
-        if missing_cols:
-            raise ValueError(f"Colonne mancanti nel dataset: {missing_cols}")
-            
-        # Conversione tipi di dati
-        for col in numeric_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Rapida analisi dati
-        print(f"Dataset shape: {df.shape}")
-        print(f"Class distribution: {df[target_column].value_counts().to_dict()}")
-        print(f"Missing values: {df[numeric_columns + categorical_columns + [target_column]].isna().sum().sum()}")
-        
-        return df, numeric_columns, categorical_columns, target_column
-    except Exception as e:
-        raise ValueError(f"Errore nel caricamento del dataset: {e}")
+    # Gestione valori infiniti e NaN
+    initial_rows = len(df)
 
-# Test standalone
+    # Identifica colonne numeriche presenti nel dataset
+    numeric_cols_present = [col for col in numeric_columns if col in df.columns]
+
+    # Sostituisci valori infiniti con NaN nelle colonne numeriche
+    if numeric_cols_present:
+        inf_count = 0
+        for col in numeric_cols_present:
+            col_inf_count = np.isinf(df[col]).sum()
+            inf_count += col_inf_count
+            if col_inf_count > 0:
+                print(f"⚠️  Trovati {col_inf_count} valori infiniti in colonna: {col}")
+        
+        df[numeric_cols_present] = df[numeric_cols_present].replace([np.inf, -np.inf], np.nan)
+        print(f"Sostituiti {inf_count} valori infiniti con NaN")
+
+    # Rimuovi righe con valori NaN (include sia NaN originali che ex-infiniti)
+    df = df.dropna().reset_index(drop=True)
+    removed_rows = initial_rows - len(df)
+    print(f"Rimosse {removed_rows} righe contenenti valori NaN o infiniti")
+    print(f"Dataset dopo pulizia: {df.shape[0]} righe, {df.shape[1]} colonne")
+
+######## END ##########
+
+    if len(df) == 0:
+        raise ValueError("Il dataset risulta vuoto dopo la rimozione dei valori NaN!")
+    
+    # Verifica che la colonna target sia presente
+    if target_column not in df.columns:
+        raise ValueError(f"Colonna target '{target_column}' non trovata nel dataset!")
+    
+    # Separa features e target
+    feature_columns = [col for col in df.columns if col != target_column]
+    X = df[feature_columns].copy()
+    y = df[target_column].copy()
+    
+    print(f"\nInizio preprocessing delle features...")
+    
+    # 1. Frequency encoding per colonne categoriche
+    print("\n--- FREQUENCY ENCODING ---")
+    X_encoded = frequency_encoding(X, categorical_columns)
+    
+    # 2. Trasformazione log1p per colonne numeriche
+    print("\n--- TRASFORMAZIONE LOG1P ---")
+    X_log_transformed = log1p_transform(X_encoded, numeric_columns)
+    
+    # 3. MinMax scaling per colonne numeriche
+    print("\n--- MINMAX SCALING ---")
+    X_scaled, scaler = minmax_scaling(X_log_transformed, numeric_columns)
+    
+    # Ricombina features e target
+    df_preprocessed = X_scaled.copy()
+    df_preprocessed[target_column] = y
+    
+    # Crea la directory di output se non esiste
+    # os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Salva il dataset preprocessato
+    print(f"\nSalvataggio dataset preprocessato in: {output_path}")
+    df_preprocessed.to_csv(output_path, index=False)
+    
+    print(f"Dataset preprocessato salvato con successo!")
+    print(f"Dimensioni finali: {df_preprocessed.shape[0]} righe, {df_preprocessed.shape[1]} colonne")
+    
+    # Stampa statistiche finali
+    print(f"\n--- STATISTICHE FINALI ---")
+    print(f"Righe processate: {len(df_preprocessed)}")
+    print(f"Colonne totali: {len(df_preprocessed.columns)}")
+    print(f"Distribuzione target:")
+    print(df_preprocessed[target_column].value_counts().sort_index())
+    
+    return df_preprocessed, scaler
+
 if __name__ == "__main__":
-    df, num_cols, cat_cols, target_col = load_dataset()
-    print("Numeric columns:", num_cols)
-    print("Categorical columns:", cat_cols)
-    print("Target column:", target_col)
-    print("Prime righe del dataset:\n", df.head())
+    preprocess_dataset()
