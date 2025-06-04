@@ -129,7 +129,7 @@ def count_outliers(df, threshold=1.5):
     
     return results
 
-def prepare_data(input_path: str, output_path: str):
+def prepare_data(input_path: str, output_dir: str):
     logger.info("Preparing data...")
     df = pd.read_csv(input_path)
 
@@ -156,10 +156,10 @@ def prepare_data(input_path: str, output_path: str):
     """
     try:
         # esecuzione del preprocessing
-        df_preprocessed, scaler = preprocess_dataset(
+        df_train, df_val, df_test, scaler, freq_mappings = preprocess_dataset(
             dataset_path=input_path,
             config_path="config/dataset.json",
-            output_path=output_path
+            output_dir=output_dir
         )
         
         logger.info("✅ Preprocessing completato con successo!")
@@ -184,9 +184,9 @@ if __name__ == "__main__":
         arguments=["--input", "--output"],
         helps=[
             "The input path for the data.",
-            "The output path for the prepared data.",
+            "The output directory for the prepared data.",
         ],
-        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets/preprocessed_dataset.csv"],
+        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets"],
     ).register_subcommand(
         subcommand="binclassifier",
         arguments=["--input", "--model-size"],

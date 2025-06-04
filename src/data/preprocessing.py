@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import json
+import os
 from sklearn.preprocessing import MinMaxScaler
 
 # carica la lista delle feature divise per tipo
@@ -9,16 +10,40 @@ def load_dataset_config(config_path="config/dataset.json"):
         config = json.load(f)
     return config['dataset']
 
-def frequency_encoding(df, categorical_columns):
-    df_encoded = df.copy()
+def frequency_encoding_fit(df_train, categorical_columns, max_levels=32):
+    """
+    Calcola la mappatura frequency encoding basandosi solo sul training set
+    """
+    freq_mappings = {}
     
     for col in categorical_columns:
+        if col in df_train.columns:
+            # Calcola la frequenza dei valori nella colonna del training set
+            value_counts = df_train[col].value_counts()
+            
+            # Prende solo i primi max_levels valori più frequenti
+            top_values = value_counts.nlargest(max_levels).index.tolist()
+            
+            # Crea la mappatura: il valore più frequente -> 1, secondo -> 2, ..., max_levels -> max_levels
+            freq_map = {val: i + 1 for i, val in enumerate(top_values)}
+            freq_mappings[col] = freq_map
+            
+            print(f"Frequency encoding mappatura creata per colonna: {col} ({len(freq_map)} valori)")
+        else:
+            print(f"Attenzione: colonna {col} non trovata nel dataset")
+    
+    return freq_mappings
+
+def frequency_encoding_transform(df, freq_mappings):
+    """
+    Applica la mappatura frequency encoding a un dataset
+    """
+    df_encoded = df.copy()
+    
+    for col, freq_map in freq_mappings.items():
         if col in df_encoded.columns:
-            # Calcola le frequenze per ogni valore nella colonna
-            freq_map = df_encoded[col].value_counts().to_dict()
-            # Sostituisce i valori con le loro frequenze
-            df_encoded[col] = df_encoded[col].map(freq_map)
-            print(f"Frequency encoding applicato alla colonna: {col}")
+            # Mappa i valori presenti in freq_map, tutti gli altri diventano 0
+            df_encoded[col] = df_encoded[col].map(lambda x: freq_map.get(x, 0))
         else:
             print(f"Attenzione: colonna {col} non trovata nel dataset")
     
@@ -29,29 +54,42 @@ def log1p_transform(df, numeric_columns):
     
     for col in numeric_columns:
         if col in df_transformed.columns:
-            # Applica log1p solo a valori non negativi, tutti i negativi vengono trasormati in 0
+            # Applica log1p solo a valori non negativi, tutti i negativi vengono trasformati in 0
             df_transformed[col] = np.log1p(df_transformed[col].clip(lower=0))
-            print(f"Trasformazione log1p applicata alla colonna: {col}")
         else:
             print(f"Attenzione: colonna {col} non trovata nel dataset")
     
     return df_transformed
 
-def minmax_scaling(df, numeric_columns):
-    df_scaled = df.copy()
+def minmax_scaling_fit(df_train, numeric_columns):
+    """
+    Fit dello scaler solo sul training set
+    """
     scaler = MinMaxScaler()
     
     # Seleziona solo le colonne numeriche presenti nel dataset
-    numeric_cols_present = [col for col in numeric_columns if col in df_scaled.columns]
+    numeric_cols_present = [col for col in numeric_columns if col in df_train.columns]
     
     if numeric_cols_present:
-        # Applica MinMax scaling
-        df_scaled[numeric_cols_present] = scaler.fit_transform(df_scaled[numeric_cols_present])
-        print(f"MinMax scaling applicato a {len(numeric_cols_present)} colonne numeriche")
+        # Fit dello scaler solo sui dati di training
+        scaler.fit(df_train[numeric_cols_present])
+        print(f"MinMax scaler fitted su {len(numeric_cols_present)} colonne numeriche del training set")
     
-    return df_scaled, scaler
+    return scaler, numeric_cols_present
 
-def preprocess_dataset(dataset_path, config_path, output_path):
+def minmax_scaling_transform(df, scaler, numeric_cols_present):
+    """
+    Applica il transform usando lo scaler già fittato
+    """
+    df_scaled = df.copy()
+    
+    if numeric_cols_present:
+        # Applica il transform
+        df_scaled[numeric_cols_present] = scaler.transform(df_scaled[numeric_cols_present])
+    
+    return df_scaled
+
+def preprocess_dataset(dataset_path, config_path, output_dir):
     # Carica la configurazione
     config = load_dataset_config(config_path)
     numeric_columns = config['numeric_columns']
@@ -67,16 +105,6 @@ def preprocess_dataset(dataset_path, config_path, output_path):
     print(f"\nCaricamento dataset da: {dataset_path}")
     df = pd.read_csv(dataset_path)
     print(f"Dataset originale: {df.shape[0]} righe, {df.shape[1]} colonne")
-
-    """ 
-    # Rimuovi righe con valori NaN
-    initial_rows = len(df)
-    df = df.dropna()
-    removed_rows = initial_rows - len(df)
-    print(f"Rimosse {removed_rows} righe contenenti valori NaN")
-    print(f"Dataset dopo rimozione NaN: {df.shape[0]} righe, {df.shape[1]} colonne")
-    """
-######## START ##########
 
     # Gestione valori infiniti e NaN
     initial_rows = len(df)
@@ -102,8 +130,6 @@ def preprocess_dataset(dataset_path, config_path, output_path):
     print(f"Rimosse {removed_rows} righe contenenti valori NaN o infiniti")
     print(f"Dataset dopo pulizia: {df.shape[0]} righe, {df.shape[1]} colonne")
 
-######## END ##########
-
     if len(df) == 0:
         raise ValueError("Il dataset risulta vuoto dopo la rimozione dei valori NaN!")
     
@@ -116,42 +142,108 @@ def preprocess_dataset(dataset_path, config_path, output_path):
     X = df[feature_columns].copy()
     y = df[target_column].copy()
     
+    print(f"\n--- SUDDIVISIONE DATASET (TEMPORALE) ---")
+    # Split sequenziale per preservare l'ordine temporale con proporzioni 80-10-10
+    total_rows = len(X)
+    
+    # Calcola gli indici di divisione per ottenere esattamente 80-10-10
+    train_size = int(total_rows * 0.8)
+    val_size = int(total_rows * 0.1)
+    # Il test set prende il resto per assicurarsi di non perdere righe
+    
+    train_end = train_size
+    val_end = train_end + val_size
+    # test_end = total_rows (implicitamente)
+    
+    # Split sequenziale mantenendo l'ordine temporale
+    X_train = X.iloc[:train_end].reset_index(drop=True).copy()
+    X_val = X.iloc[train_end:val_end].reset_index(drop=True).copy()
+    X_test = X.iloc[val_end:].reset_index(drop=True).copy()
+    
+    y_train = y.iloc[:train_end].reset_index(drop=True).copy()
+    y_val = y.iloc[train_end:val_end].reset_index(drop=True).copy()
+    y_test = y.iloc[val_end:].reset_index(drop=True).copy()
+    
+    print(f"Training set: {X_train.shape[0]} righe ({X_train.shape[0]/total_rows*100:.1f}%) - Righe: 0 a {train_end-1}")
+    print(f"Validation set: {X_val.shape[0]} righe ({X_val.shape[0]/total_rows*100:.1f}%) - Righe: {train_end} a {val_end-1}")
+    print(f"Test set: {X_test.shape[0]} righe ({X_test.shape[0]/total_rows*100:.1f}%) - Righe: {val_end} a {total_rows-1}")
+    
+    # Verifica che la somma sia corretta
+    total_check = X_train.shape[0] + X_val.shape[0] + X_test.shape[0]
+    print(f"Verifica totale righe: {total_check} (dovrebbe essere {total_rows})")
+    
     print(f"\nInizio preprocessing delle features...")
     
-    # 1. Frequency encoding per colonne categoriche
+    # 1. Frequency encoding - FIT solo sul training set
     print("\n--- FREQUENCY ENCODING ---")
-    X_encoded = frequency_encoding(X, categorical_columns)
+    freq_mappings = frequency_encoding_fit(X_train, categorical_columns)
+    
+    # Applica frequency encoding a tutti i set usando la mappatura del training
+    X_train_encoded = frequency_encoding_transform(X_train, freq_mappings)
+    X_val_encoded = frequency_encoding_transform(X_val, freq_mappings)
+    X_test_encoded = frequency_encoding_transform(X_test, freq_mappings)
+    print("Frequency encoding applicato a train, validation e test set")
     
     # 2. Trasformazione log1p per colonne numeriche
     print("\n--- TRASFORMAZIONE LOG1P ---")
-    X_log_transformed = log1p_transform(X_encoded, numeric_columns)
+    X_train_log = log1p_transform(X_train_encoded, numeric_columns)
+    X_val_log = log1p_transform(X_val_encoded, numeric_columns)
+    X_test_log = log1p_transform(X_test_encoded, numeric_columns)
+    print("Trasformazione log1p applicata a train, validation e test set")
     
-    # 3. MinMax scaling per colonne numeriche
+    # 3. MinMax scaling - FIT solo sul training set
     print("\n--- MINMAX SCALING ---")
-    X_scaled, scaler = minmax_scaling(X_log_transformed, numeric_columns)
+    scaler, numeric_cols_present = minmax_scaling_fit(X_train_log, numeric_columns)
     
-    # Ricombina features e target
-    df_preprocessed = X_scaled.copy()
-    df_preprocessed[target_column] = y
+    # Applica scaling a tutti i set usando lo scaler fittato sul training
+    X_train_scaled = minmax_scaling_transform(X_train_log, scaler, numeric_cols_present)
+    X_val_scaled = minmax_scaling_transform(X_val_log, scaler, numeric_cols_present)
+    X_test_scaled = minmax_scaling_transform(X_test_log, scaler, numeric_cols_present)
+    print("MinMax scaling applicato a train, validation e test set")
+    
+    # Ricombina features e target per ogni set
+    df_train = X_train_scaled.copy()
+    df_train[target_column] = y_train.reset_index(drop=True)
+    
+    df_val = X_val_scaled.copy()
+    df_val[target_column] = y_val.reset_index(drop=True)
+    
+    df_test = X_test_scaled.copy()
+    df_test[target_column] = y_test.reset_index(drop=True)
     
     # Crea la directory di output se non esiste
-    # os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
-    # Salva il dataset preprocessato
-    print(f"\nSalvataggio dataset preprocessato in: {output_path}")
-    df_preprocessed.to_csv(output_path, index=False)
+    # Definisci i percorsi di output
+    train_path = os.path.join(output_dir, "train.csv")
+    val_path = os.path.join(output_dir, "val.csv")
+    test_path = os.path.join(output_dir, "test.csv")
     
-    print(f"Dataset preprocessato salvato con successo!")
-    print(f"Dimensioni finali: {df_preprocessed.shape[0]} righe, {df_preprocessed.shape[1]} colonne")
+    # Salva i dataset preprocessati
+    print(f"\nSalvataggio dataset preprocessati in: {output_dir}")
+    df_train.to_csv(train_path, index=False)
+    df_val.to_csv(val_path, index=False)
+    df_test.to_csv(test_path, index=False)
+    
+    print(f"Dataset salvati con successo!")
+    print(f"- Training: {train_path} ({df_train.shape[0]} righe, {df_train.shape[1]} colonne)")
+    print(f"- Validation: {val_path} ({df_val.shape[0]} righe, {df_val.shape[1]} colonne)")
+    print(f"- Test: {test_path} ({df_test.shape[0]} righe, {df_test.shape[1]} colonne)")
     
     # Stampa statistiche finali
     print(f"\n--- STATISTICHE FINALI ---")
-    print(f"Righe processate: {len(df_preprocessed)}")
-    print(f"Colonne totali: {len(df_preprocessed.columns)}")
-    print(f"Distribuzione target:")
-    print(df_preprocessed[target_column].value_counts().sort_index())
+    print(f"Distribuzione target nel training set:")
+    print(df_train[target_column].value_counts().sort_index())
+    print(f"\nDistribuzione target nel validation set:")
+    print(df_val[target_column].value_counts().sort_index())
+    print(f"\nDistribuzione target nel test set:")
+    print(df_test[target_column].value_counts().sort_index())
     
-    return df_preprocessed, scaler
+    return df_train, df_val, df_test, scaler, freq_mappings
 
 if __name__ == "__main__":
-    preprocess_dataset()
+    preprocess_dataset(
+        dataset_path="resources/datasets/NF-UNSW-NB15-v3.csv",
+        config_path="config/dataset.json",
+        output_dir="resources/datasets"
+    )
