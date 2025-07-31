@@ -6,9 +6,10 @@ import pandas as pd
 
 from utilities.logging_config import setup_logging
 from utilities.argument_parser import ArgumentParser
+
 from data.outlier_stat import compare_outlier_impact_table
 from data.preprocessing import preprocess_dataset
-
+from trainer.trainer1 import main_pipeline
 import numpy as np
 
 setup_logging()
@@ -132,7 +133,7 @@ def count_outliers(df, threshold=1.5):
 def prepare_data(input_path: str, output_dir: str):
     logger.info("Preparing data...")
     df = pd.read_csv(input_path)
-
+    
     """
     logger.info(f"Numero totale di righe: {len(df)}")
     logger.info("Risultati dell'analisi degli outlier:")
@@ -160,6 +161,7 @@ def prepare_data(input_path: str, output_dir: str):
             dataset_path=input_path,
             config_path="config/dataset.json",
             output_dir=output_dir
+            # useful_zone_percentage=60
         )
         
         logger.info("✅ Preprocessing completato con successo!")
@@ -171,9 +173,10 @@ def prepare_data(input_path: str, output_dir: str):
     except Exception as e:
         logger.info(f"❌ Errore imprevisto: {e}")
 
-def run_binclassifier (input_path: str, model_size: str):
-    print(">> prepare_data() chiamata")
+def run_classifier (model_size: str):
     logger.info("Running the binary classifier...")
+    main_pipeline()
+    logger.info("✅ Training completato con successo!")
 
 
 if __name__ == "__main__":
@@ -188,18 +191,17 @@ if __name__ == "__main__":
         ],
         defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets"],
     ).register_subcommand(
-        subcommand="binclassifier",
-        arguments=["--input", "--model-size"],
+        subcommand="run",
+        arguments=["--model-size"],
         helps=[
-            "The input path for the data.",
             "The model size: small, medium, or large.",
         ],
-        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "small"],
+        defaults=["small"],
     )
 
     args = parser.parse_arguments(sys.argv[1:])
 
     if args.subcommand == "prepare":
         prepare_data(args.input, args.output)
-    # elif args.subcommand == "binclassifier":
-    #    run_binclassifier(args.input, args.model_size)
+    elif args.subcommand == "run":
+        run_classifier(args.model_size)

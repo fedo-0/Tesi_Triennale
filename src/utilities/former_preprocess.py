@@ -89,51 +89,7 @@ def minmax_scaling_transform(df, scaler, numeric_cols_present):
     
     return df_scaled
 
-def analyze_attack_distribution(df, target_column):
-    """
-    Analizza la distribuzione degli attacchi per trovare la zona utile
-    """
-    print(f"\n--- ANALISI DISTRIBUZIONE ATTACCHI ---")
-    
-    # Assumendo che gli attacchi siano tutti i valori != 0 (o != 'Benign' se stringa)
-    # Adatta questa logica in base al tuo target_column
-    if df[target_column].dtype == 'object':
-        # Se il target è una stringa, assumiamo che 'Benign' sia la classe benigna
-        attack_mask = df[target_column] != 'Benign'
-    else:
-        # Se il target è numerico, assumiamo che 0 sia la classe benigna
-        attack_mask = df[target_column] != 0
-    
-    total_rows = len(df)
-    
-    # Calcola la percentuale di attacchi in finestre scorrevoli
-    window_size = int(total_rows * 0.01)  # Finestra dell'1% del dataset
-    attack_percentages = []
-    
-    for i in range(0, total_rows - window_size, window_size):
-        window_attacks = attack_mask.iloc[i:i+window_size].sum()
-        attack_percentage = (window_attacks / window_size) * 100
-        attack_percentages.append(attack_percentage)
-    
-    # Trova l'ultimo punto dove ci sono ancora attacchi significativi
-    threshold = 1.0  # Soglia minima di attacchi per considerare la zona "utile"
-    useful_zone_end = total_rows
-    
-    for i in range(len(attack_percentages) - 1, -1, -1):
-        if attack_percentages[i] > threshold:
-            useful_zone_end = min((i + 1) * window_size, total_rows)
-            break
-    
-    # Calcola la percentuale della zona utile
-    useful_zone_percentage = (useful_zone_end / total_rows) * 100
-    
-    print(f"Zona utile identificata: prime {useful_zone_end} righe ({useful_zone_percentage:.1f}% del dataset)")
-    print(f"Attacchi nella zona utile: {attack_mask.iloc[:useful_zone_end].sum()}")
-    print(f"Attacchi totali nel dataset: {attack_mask.sum()}")
-    
-    return useful_zone_end
-
-def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percentage=60):
+def preprocess_dataset(dataset_path, config_path, output_dir):
     # Carica la configurazione
     config = load_dataset_config(config_path)
     numeric_columns = config['numeric_columns']
@@ -181,68 +137,40 @@ def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percen
     if target_column not in df.columns:
         raise ValueError(f"Colonna target '{target_column}' non trovata nel dataset!")
     
-    # Analizza la distribuzione degli attacchi (opzionale, per verifica)
-    # useful_zone_end = analyze_attack_distribution(df, target_column)
-    
-    # Usa la percentuale specificata per definire la zona utile
-    total_rows = len(df)
-    useful_zone_end = int(total_rows * useful_zone_percentage / 100)
-    
-    print(f"\n--- DEFINIZIONE ZONA UTILE ---")
-    print(f"Zona utile definita: prime {useful_zone_end} righe ({useful_zone_percentage}% del dataset)")
-    print(f"Zona non utile: righe da {useful_zone_end} a {total_rows-1} ({100-useful_zone_percentage}% del dataset)")
-    
     # Separa features e target
     feature_columns = [col for col in df.columns if col != target_column]
     X = df[feature_columns].copy()
     y = df[target_column].copy()
     
-    print(f"\n--- SUDDIVISIONE DATASET CON CRITERIO ZONA UTILE ---")
+    print(f"\n--- SUDDIVISIONE DATASET (TEMPORALE) ---")
+    # Split sequenziale per preservare l'ordine temporale con proporzioni 80-10-10
+    total_rows = len(X)
     
-    # Nuova strategia di suddivisione:
-    # 1. Validation: primi 10% della zona utile
-    # 2. Test: successivi 10% della zona utile  
-    # 3. Train: rimanenti 80% della zona utile + tutta la zona non utile
+    # Calcola gli indici di divisione per ottenere esattamente 80-10-10
+    train_size = int(total_rows * 0.8)
+    val_size = int(total_rows * 0.1)
+    # Il test set prende il resto per assicurarsi di non perdere righe
     
-    val_size = int(useful_zone_end * 0.10)
-    test_size = int(useful_zone_end * 0.10)
-    train_size_useful = useful_zone_end - val_size - test_size
-    train_size_total = train_size_useful + (total_rows - useful_zone_end)
+    train_end = train_size
+    val_end = train_end + val_size
+    # test_end = total_rows (implicitamente)
     
-    # Definisci gli indici di suddivisione
-    val_start = 0
-    val_end = val_size
+    # Split sequenziale mantenendo l'ordine temporale
+    X_train = X.iloc[:train_end].reset_index(drop=True).copy()
+    X_val = X.iloc[train_end:val_end].reset_index(drop=True).copy()
+    X_test = X.iloc[val_end:].reset_index(drop=True).copy()
     
-    test_start = val_end
-    test_end = test_start + test_size
+    y_train = y.iloc[:train_end].reset_index(drop=True).copy()
+    y_val = y.iloc[train_end:val_end].reset_index(drop=True).copy()
+    y_test = y.iloc[val_end:].reset_index(drop=True).copy()
     
-    train_start = test_end
-    train_end = total_rows  # Include tutto il resto (zona utile rimanente + zona non utile)
-    
-    # Suddividi i dati
-    X_val = X.iloc[val_start:val_end].reset_index(drop=True).copy()
-    X_test = X.iloc[test_start:test_end].reset_index(drop=True).copy()
-    X_train = X.iloc[train_start:train_end].reset_index(drop=True).copy()
-    
-    y_val = y.iloc[val_start:val_end].reset_index(drop=True).copy()
-    y_test = y.iloc[test_start:test_end].reset_index(drop=True).copy()
-    y_train = y.iloc[train_start:train_end].reset_index(drop=True).copy()
-    
-    print(f"Validation set: {X_val.shape[0]} righe ({X_val.shape[0]/total_rows*100:.1f}%) - Righe: {val_start} a {val_end-1}")
-    print(f"Test set: {X_test.shape[0]} righe ({X_test.shape[0]/total_rows*100:.1f}%) - Righe: {test_start} a {test_end-1}")
-    print(f"Training set: {X_train.shape[0]} righe ({X_train.shape[0]/total_rows*100:.1f}%) - Righe: {train_start} a {train_end-1}")
-    
-    # Analisi della composizione del training set
-    train_useful_zone = max(0, useful_zone_end - train_start)
-    train_non_useful_zone = X_train.shape[0] - train_useful_zone
-    
-    print(f"\nComposizione Training set:")
-    print(f"- Zona utile: {train_useful_zone} righe ({train_useful_zone/X_train.shape[0]*100:.1f}%)")
-    print(f"- Zona non utile: {train_non_useful_zone} righe ({train_non_useful_zone/X_train.shape[0]*100:.1f}%)")
+    print(f"Training set: {X_train.shape[0]} righe ({X_train.shape[0]/total_rows*100:.1f}%) - Righe: 0 a {train_end-1}")
+    print(f"Validation set: {X_val.shape[0]} righe ({X_val.shape[0]/total_rows*100:.1f}%) - Righe: {train_end} a {val_end-1}")
+    print(f"Test set: {X_test.shape[0]} righe ({X_test.shape[0]/total_rows*100:.1f}%) - Righe: {val_end} a {total_rows-1}")
     
     # Verifica che la somma sia corretta
     total_check = X_train.shape[0] + X_val.shape[0] + X_test.shape[0]
-    print(f"\nVerifica totale righe: {total_check} (dovrebbe essere {total_rows})")
+    print(f"Verifica totale righe: {total_check} (dovrebbe essere {total_rows})")
     
     print(f"\nInizio preprocessing delle features...")
     
@@ -304,19 +232,19 @@ def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percen
     
     # Stampa statistiche finali
     print(f"\n--- STATISTICHE FINALI ---")
-    print(f"Distribuzione target nel validation set:")
+    print(f"Distribuzione target nel training set:")
+    print(df_train[target_column].value_counts().sort_index())
+    print(f"\nDistribuzione target nel validation set:")
     print(df_val[target_column].value_counts().sort_index())
     print(f"\nDistribuzione target nel test set:")
     print(df_test[target_column].value_counts().sort_index())
-    print(f"\nDistribuzione target nel training set:")
-    print(df_train[target_column].value_counts().sort_index())
     
     return df_train, df_val, df_test, scaler, freq_mappings
 
 if __name__ == "__main__":
+
     preprocess_dataset(
         dataset_path="resources/datasets/NF-UNSW-NB15-v3.csv",
         config_path="config/dataset.json",
-        output_dir="resources/datasets",
-        useful_zone_percentage=60
+        output_dir="resources/datasets"
     )
