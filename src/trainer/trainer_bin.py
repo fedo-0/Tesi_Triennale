@@ -10,7 +10,7 @@ import seaborn as sns
 from tqdm import tqdm
 from datetime import datetime
 
-from src.model.model_bin import NetworkTrafficMLP, NetworkTrafficDataset, save_model
+from model.model_bin import NetworkTrafficMLP, NetworkTrafficDataset, save_model
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

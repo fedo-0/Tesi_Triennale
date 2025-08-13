@@ -8,8 +8,9 @@ from utilities.logging_config import setup_logging
 from utilities.argument_parser import ArgumentParser
 
 from data.outlier_stat import compare_outlier_impact_table
-from src.data.bin_preprocessing import preprocess_dataset_binary
-from src.trainer.trainer_bin import main_pipeline_bin
+from data.bin_preprocessing import preprocess_dataset_binary
+from data.multi_preprocessing import preprocess_dataset_multiclass
+from trainer.trainer_bin import main_pipeline_bin
 import numpy as np
 
 setup_logging()
@@ -156,13 +157,19 @@ def prepare_data(input_path: str, output_dir: str):
     table = compare_outlier_impact_table(df, all_cols)
     """
     try:
-        # esecuzione del preprocessing
-        df_train, df_val, df_test, scaler, freq_mappings = preprocess_dataset_binary(
+        # esecuzione del preprocessing binario
+        #df_train, df_val, df_test, scaler, freq_mappings = preprocess_dataset_binary(
+        #    dataset_path=input_path,
+        #    config_path="config/dataset.json",
+        #    output_dir=output_dir
+        #)
+
+        # esecuzione del preprocessing multiclasse
+        df_train, df_val, df_test, scaler, freq_mappings, label_encoder, class_mapping = preprocess_dataset_multiclass(
             dataset_path=input_path,
             config_path="config/dataset.json",
             output_dir=output_dir
         )
-        
         
         logger.info("✅ Preprocessing completato con successo!")
         
@@ -180,7 +187,7 @@ def run_binclassifier (model_size: str):
 
 def run_multiclassifier (model_size:str):
     logger.info("Preparando il classificatore multiclasse...")
-    #nome funzione()
+    #nome_funzione()
     logger.info("✅ Training completato con successo!")
 
 
