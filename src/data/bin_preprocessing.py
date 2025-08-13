@@ -325,7 +325,7 @@ def micro_window_split(df, target_column, train_ratio=0.70, val_ratio=0.15, test
     
     return train_data, val_data, test_data
 
-def preprocess_dataset(dataset_path, config_path, output_dir, 
+def preprocess_dataset_binary(dataset_path, config_path, output_dir, 
                       train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
                       min_window_size=10, max_window_size=30):
     # Carica la configurazione
@@ -482,7 +482,7 @@ def preprocess_dataset(dataset_path, config_path, output_dir,
     return df_train, df_val, df_test, scaler, freq_mappings
 
 if __name__ == "__main__":
-    preprocess_dataset(
+    preprocess_dataset_binary(
         dataset_path="resources/datasets/NF-UNSW-NB15-v3.csv",
         config_path="config/dataset.json",
         output_dir="resources/datasets",

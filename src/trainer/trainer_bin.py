@@ -10,7 +10,7 @@ import seaborn as sns
 from tqdm import tqdm
 from datetime import datetime
 
-from model.model1 import NetworkTrafficMLP, NetworkTrafficDataset, save_model
+from src.model.model_bin import NetworkTrafficMLP, NetworkTrafficDataset, save_model
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -113,7 +113,7 @@ class ModelTrainer:
         return avg_loss, accuracy
     """
     def train_epoch(self, train_loader, epoch):
-        """Addestra per una epoch - VERSIONE MIGLIORATA"""
+        """Addestra per una epoch"""
         self.model.train()
         total_loss = 0
         correct = 0
@@ -460,7 +460,7 @@ def evaluate_model(model, test_loader, device):
     return accuracy, precision, recall, f1, predictions, targets, probabilities
 
 
-def main_pipeline(model_size="small"):
+def main_pipeline_bin(model_size="small"):
 
     """Funzione principale per l'addestramento"""
     # Configura device
@@ -538,4 +538,4 @@ def main_pipeline(model_size="small"):
 
 
 if __name__ == "__main__":
-    main_pipeline()
+    main_pipeline_bin()

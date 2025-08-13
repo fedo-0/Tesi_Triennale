@@ -8,14 +8,13 @@ from utilities.logging_config import setup_logging
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.utils.class_weight import compute_class_weight
 
-# Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
 class NetworkTrafficMLP(nn.Module):
     """
-    Multi-Layer Perceptron migliorato per classificazione binaria di traffico di rete
+    Multi-Layer Perceptron per classificazione binaria di traffico di rete
     """
     def __init__(self, input_dim, config, class_weights=None):
         super(NetworkTrafficMLP, self).__init__()
