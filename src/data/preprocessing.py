@@ -3,6 +3,7 @@ import numpy as np
 import json
 import os
 from sklearn.preprocessing import MinMaxScaler
+from collections import defaultdict
 
 # carica la lista delle feature divise per tipo
 def load_dataset_config(config_path="config/dataset.json"):
@@ -89,51 +90,244 @@ def minmax_scaling_transform(df, scaler, numeric_cols_present):
     
     return df_scaled
 
-def analyze_attack_distribution(df, target_column):
+def analyze_packet_distribution(df, target_column):
     """
-    Analizza la distribuzione degli attacchi per trovare la zona utile
+    Analizza la distribuzione dei pacchetti nel dataset per identificare pattern temporali
     """
-    print(f"\n--- ANALISI DISTRIBUZIONE ATTACCHI ---")
+    print(f"\n--- ANALISI DISTRIBUZIONE PACCHETTI ---")
     
-    # Assumendo che gli attacchi siano tutti i valori != 0 (o != 'Benign' se stringa)
-    # Adatta questa logica in base al tuo target_column
+    # Identifica attacchi (assumendo che 0 o 'Benign' sia la classe benigna)
     if df[target_column].dtype == 'object':
-        # Se il target è una stringa, assumiamo che 'Benign' sia la classe benigna
         attack_mask = df[target_column] != 'Benign'
     else:
-        # Se il target è numerico, assumiamo che 0 sia la classe benigna
         attack_mask = df[target_column] != 0
     
-    total_rows = len(df)
+    total_packets = len(df)
+    attack_packets = attack_mask.sum()
+    benign_packets = total_packets - attack_packets
     
-    # Calcola la percentuale di attacchi in finestre scorrevoli
-    window_size = int(total_rows * 0.01)  # Finestra dell'1% del dataset
-    attack_percentages = []
+    print(f"Pacchetti totali: {total_packets:,}")
+    print(f"Pacchetti di attacco: {attack_packets:,} ({attack_packets/total_packets*100:.2f}%)")
+    print(f"Pacchetti benigni: {benign_packets:,} ({benign_packets/total_packets*100:.2f}%)")
     
-    for i in range(0, total_rows - window_size, window_size):
-        window_attacks = attack_mask.iloc[i:i+window_size].sum()
-        attack_percentage = (window_attacks / window_size) * 100
-        attack_percentages.append(attack_percentage)
-    
-    # Trova l'ultimo punto dove ci sono ancora attacchi significativi
-    threshold = 1.0  # Soglia minima di attacchi per considerare la zona "utile"
-    useful_zone_end = total_rows
-    
-    for i in range(len(attack_percentages) - 1, -1, -1):
-        if attack_percentages[i] > threshold:
-            useful_zone_end = min((i + 1) * window_size, total_rows)
-            break
-    
-    # Calcola la percentuale della zona utile
-    useful_zone_percentage = (useful_zone_end / total_rows) * 100
-    
-    print(f"Zona utile identificata: prime {useful_zone_end} righe ({useful_zone_percentage:.1f}% del dataset)")
-    print(f"Attacchi nella zona utile: {attack_mask.iloc[:useful_zone_end].sum()}")
-    print(f"Attacchi totali nel dataset: {attack_mask.sum()}")
-    
-    return useful_zone_end
+    # Trova dove finiscono gli attacchi
+    if attack_packets > 0:
+        attack_positions = df[attack_mask].index.tolist()
+        first_attack = attack_positions[0]
+        last_attack = attack_positions[-1]
+        attack_span = (last_attack + 1) / total_packets
+        
+        print(f"Primo attacco: posizione {first_attack:,}")
+        print(f"Ultimo attacco: posizione {last_attack:,}")
+        print(f"Span degli attacchi: {attack_span*100:.1f}% del dataset")
+        
+        return {
+            'total_packets': total_packets,
+            'attack_packets': attack_packets,
+            'last_attack_position': last_attack,
+            'attack_span': attack_span
+        }
+    else:
+        print("Nessun attacco trovato nel dataset!")
+        return {
+            'total_packets': total_packets,
+            'attack_packets': 0,
+            'last_attack_position': 0,
+            'attack_span': 0
+        }
 
-def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percentage=60):
+def create_micro_windows(df, target_column, min_window_size=10, max_window_size=30):
+    """
+    Crea micro-finestre adattive basate sulla presenza di attacchi
+    """
+    print(f"\n--- CREAZIONE MICRO-FINESTRE ({min_window_size}-{max_window_size} pacchetti) ---")
+    
+    # Identifica attacchi
+    if df[target_column].dtype == 'object':
+        attack_mask = df[target_column] != 'Benign'
+    else:
+        attack_mask = df[target_column] != 0
+    
+    micro_windows = []
+    current_pos = 0
+    window_id = 0
+    
+    while current_pos < len(df):
+        # Determina dimensione finestra adattiva
+        remaining_packets = len(df) - current_pos
+        max_possible_size = min(max_window_size, remaining_packets)
+        
+        # Inizia con dimensione minima e espandi se necessario
+        window_size = min_window_size
+        
+        # Se siamo in una zona con pochi attacchi, usa finestre più grandi
+        lookahead_window = df.iloc[current_pos:current_pos + max_possible_size]
+        lookahead_attack_ratio = attack_mask.iloc[current_pos:current_pos + max_possible_size].mean()
+        
+        if lookahead_attack_ratio == 0:  # Zona solo benigna
+            window_size = max_possible_size
+        elif lookahead_attack_ratio < 0.1:  # Pochi attacchi
+            window_size = min(max_window_size, max_possible_size)
+        else:  # Zona con attacchi, usa finestre più piccole
+            window_size = min(min_window_size + 5, max_possible_size)
+        
+        # Estrai micro-finestra
+        end_pos = min(current_pos + window_size, len(df))
+        micro_window_data = df.iloc[current_pos:end_pos].copy()
+        
+        # Calcola statistiche finestra
+        window_attack_mask = attack_mask.iloc[current_pos:end_pos]
+        attack_count = window_attack_mask.sum()
+        attack_ratio = attack_count / len(micro_window_data)
+        
+        # Salva micro-finestra con metadati
+        window_info = {
+            'id': window_id,
+            'data': micro_window_data,
+            'start_pos': current_pos,
+            'end_pos': end_pos,
+            'size': len(micro_window_data),
+            'attack_count': attack_count,
+            'attack_ratio': attack_ratio,
+            'benign_count': len(micro_window_data) - attack_count
+        }
+        
+        micro_windows.append(window_info)
+        
+        current_pos = end_pos
+        window_id += 1
+        
+        # Progress feedback ogni 1000 finestre
+        if window_id % 1000 == 0:
+            print(f"  Processate {window_id} micro-finestre...")
+    
+    print(f"Totale micro-finestre create: {len(micro_windows)}")
+    
+    # Analizza le micro-finestre create
+    sizes = [w['size'] for w in micro_windows]
+    attack_ratios = [w['attack_ratio'] for w in micro_windows]
+    
+    print(f"\nStatistiche Micro-Finestre:")
+    print(f"  Dimensione media: {np.mean(sizes):.1f} pacchetti")
+    print(f"  Range dimensioni: {min(sizes)}-{max(sizes)} pacchetti")
+    print(f"  Ratio attacchi medio: {np.mean(attack_ratios):.3f}")
+    print(f"  Finestre con attacchi: {sum(1 for r in attack_ratios if r > 0)} ({sum(1 for r in attack_ratios if r > 0)/len(attack_ratios)*100:.1f}%)")
+    print(f"  Finestre solo benigne: {sum(1 for r in attack_ratios if r == 0)} ({sum(1 for r in attack_ratios if r == 0)/len(attack_ratios)*100:.1f}%)")
+    
+    return micro_windows
+
+def stratified_window_assignment(micro_windows, train_ratio=0.70, val_ratio=0.15, test_ratio=0.15):
+    """
+    Assegna le micro-finestre ai set train/val/test in modo stratificato
+    """
+    print(f"\n--- ASSEGNAZIONE STRATIFICATA MICRO-FINESTRE ({train_ratio*100:.0f}-{val_ratio*100:.0f}-{test_ratio*100:.0f}) ---")
+    
+    # Categorizza finestre per contenuto
+    pure_benign = [w for w in micro_windows if w['attack_ratio'] == 0]
+    low_attack = [w for w in micro_windows if 0 < w['attack_ratio'] <= 0.2]
+    medium_attack = [w for w in micro_windows if 0.2 < w['attack_ratio'] <= 0.6]
+    high_attack = [w for w in micro_windows if w['attack_ratio'] > 0.6]
+    
+    categories = {
+        'pure_benign': pure_benign,
+        'low_attack': low_attack, 
+        'medium_attack': medium_attack,
+        'high_attack': high_attack
+    }
+    
+    print("Distribuzione categorie micro-finestre:")
+    for name, windows in categories.items():
+        print(f"  {name}: {len(windows)} finestre ({len(windows)/len(micro_windows)*100:.1f}%)")
+    
+    # Assegna proporzionalmente ogni categoria
+    train_windows, val_windows, test_windows = [], [], []
+    
+    for category_name, windows in categories.items():
+        if len(windows) == 0:
+            continue
+        
+        # Distribuzione round-robin per preservare ordine temporale
+        # Pattern 70-15-15: ogni 20 finestre → 14 train, 3 val, 3 test
+        for i, window in enumerate(windows):
+            cycle_pos = i % 20
+            
+            if cycle_pos < 14:  # 70% train (14/20)
+                train_windows.append(window)
+                assignment = "Train"
+            elif cycle_pos < 17:  # 15% val (3/20)
+                val_windows.append(window)
+                assignment = "Val"
+            else:  # 15% test (3/20)
+                test_windows.append(window)
+                assignment = "Test"
+        
+        print(f"  {category_name}: Train={len([w for w in windows if w in train_windows])}, "
+              f"Val={len([w for w in windows if w in val_windows])}, "
+              f"Test={len([w for w in windows if w in test_windows])}")
+    
+    # Ordina per posizione temporale per mantenere sequenzialità nei set
+    train_windows.sort(key=lambda x: x['start_pos'])
+    val_windows.sort(key=lambda x: x['start_pos'])
+    test_windows.sort(key=lambda x: x['start_pos'])
+    
+    print(f"\nTotale finestre assegnate:")
+    print(f"  Train: {len(train_windows)} finestre")
+    print(f"  Validation: {len(val_windows)} finestre")
+    print(f"  Test: {len(test_windows)} finestre")
+    
+    return train_windows, val_windows, test_windows
+
+def reconstruct_datasets(train_windows, val_windows, test_windows):
+    """
+    Ricostruisce i dataset finali concatenando le micro-finestre
+    """
+    print(f"\n--- RICOSTRUZIONE DATASET FINALI ---")
+    
+    # Concatena micro-finestre mantenendo ordine temporale
+    train_data = pd.concat([w['data'] for w in train_windows], ignore_index=True)
+    val_data = pd.concat([w['data'] for w in val_windows], ignore_index=True)
+    test_data = pd.concat([w['data'] for w in test_windows], ignore_index=True)
+    
+    print(f"Dataset ricostruiti:")
+    print(f"  Train: {len(train_data)} pacchetti")
+    print(f"  Validation: {len(val_data)} pacchetti")
+    print(f"  Test: {len(test_data)} pacchetti")
+    
+    return train_data, val_data, test_data
+
+def micro_window_split(df, target_column, train_ratio=0.70, val_ratio=0.15, test_ratio=0.15, 
+                      min_window_size=10, max_window_size=30):
+    """
+    Metodo principale per dividere i dati con micro-finestre stratificate
+    """
+    print("MICRO-WINDOW STRATIFIED TEMPORAL SPLIT")
+    print("=" * 60)
+    
+    # Verifica che i ratio sommino a 1
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "I ratio devono sommare a 1"
+    
+    # Analisi distribuzione pacchetti
+    packet_stats = analyze_packet_distribution(df, target_column)
+    
+    # Crea micro-finestre
+    micro_windows = create_micro_windows(df, target_column, min_window_size, max_window_size)
+    
+    if len(micro_windows) < 3:
+        raise ValueError("Troppo poche micro-finestre per creare train/val/test set")
+    
+    # Assegnazione stratificata
+    train_windows, val_windows, test_windows = stratified_window_assignment(
+        micro_windows, train_ratio, val_ratio, test_ratio
+    )
+    
+    # Ricostruzione dataset
+    train_data, val_data, test_data = reconstruct_datasets(train_windows, val_windows, test_windows)
+    
+    return train_data, val_data, test_data
+
+def preprocess_dataset(dataset_path, config_path, output_dir, 
+                      train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
+                      min_window_size=10, max_window_size=30):
     # Carica la configurazione
     config = load_dataset_config(config_path)
     numeric_columns = config['numeric_columns']
@@ -181,68 +375,27 @@ def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percen
     if target_column not in df.columns:
         raise ValueError(f"Colonna target '{target_column}' non trovata nel dataset!")
     
-    # Analizza la distribuzione degli attacchi (opzionale, per verifica)
-    # useful_zone_end = analyze_attack_distribution(df, target_column)
-    
-    # Usa la percentuale specificata per definire la zona utile
-    total_rows = len(df)
-    useful_zone_end = int(total_rows * useful_zone_percentage / 100)
-    
-    print(f"\n--- DEFINIZIONE ZONA UTILE ---")
-    print(f"Zona utile definita: prime {useful_zone_end} righe ({useful_zone_percentage}% del dataset)")
-    print(f"Zona non utile: righe da {useful_zone_end} a {total_rows-1} ({100-useful_zone_percentage}% del dataset)")
-    
-    # Separa features e target
+    # NUOVA SUDDIVISIONE CON MICRO-FINESTRE STRATIFICATE
     feature_columns = [col for col in df.columns if col != target_column]
-    X = df[feature_columns].copy()
-    y = df[target_column].copy()
     
-    print(f"\n--- SUDDIVISIONE DATASET CON CRITERIO ZONA UTILE ---")
+    # Applica la nuova suddivisione
+    train_data, val_data, test_data = micro_window_split(
+        df, target_column, train_ratio, val_ratio, test_ratio, 
+        min_window_size, max_window_size
+    )
     
-    # Nuova strategia di suddivisione:
-    # 1. Validation: primi 10% della zona utile
-    # 2. Test: successivi 10% della zona utile  
-    # 3. Train: rimanenti 80% della zona utile + tutta la zona non utile
+    # Separa features e target per ogni set
+    X_train = train_data[feature_columns].copy()
+    y_train = train_data[target_column].copy()
     
-    val_size = int(useful_zone_end * 0.10)
-    test_size = int(useful_zone_end * 0.10)
-    train_size_useful = useful_zone_end - val_size - test_size
-    train_size_total = train_size_useful + (total_rows - useful_zone_end)
+    X_val = val_data[feature_columns].copy()
+    y_val = val_data[target_column].copy()
     
-    # Definisci gli indici di suddivisione
-    val_start = 0
-    val_end = val_size
+    X_test = test_data[feature_columns].copy()
+    y_test = test_data[target_column].copy()
     
-    test_start = val_end
-    test_end = test_start + test_size
-    
-    train_start = test_end
-    train_end = total_rows  # Include tutto il resto (zona utile rimanente + zona non utile)
-    
-    # Suddividi i dati
-    X_val = X.iloc[val_start:val_end].reset_index(drop=True).copy()
-    X_test = X.iloc[test_start:test_end].reset_index(drop=True).copy()
-    X_train = X.iloc[train_start:train_end].reset_index(drop=True).copy()
-    
-    y_val = y.iloc[val_start:val_end].reset_index(drop=True).copy()
-    y_test = y.iloc[test_start:test_end].reset_index(drop=True).copy()
-    y_train = y.iloc[train_start:train_end].reset_index(drop=True).copy()
-    
-    print(f"Validation set: {X_val.shape[0]} righe ({X_val.shape[0]/total_rows*100:.1f}%) - Righe: {val_start} a {val_end-1}")
-    print(f"Test set: {X_test.shape[0]} righe ({X_test.shape[0]/total_rows*100:.1f}%) - Righe: {test_start} a {test_end-1}")
-    print(f"Training set: {X_train.shape[0]} righe ({X_train.shape[0]/total_rows*100:.1f}%) - Righe: {train_start} a {train_end-1}")
-    
-    # Analisi della composizione del training set
-    train_useful_zone = max(0, useful_zone_end - train_start)
-    train_non_useful_zone = X_train.shape[0] - train_useful_zone
-    
-    print(f"\nComposizione Training set:")
-    print(f"- Zona utile: {train_useful_zone} righe ({train_useful_zone/X_train.shape[0]*100:.1f}%)")
-    print(f"- Zona non utile: {train_non_useful_zone} righe ({train_non_useful_zone/X_train.shape[0]*100:.1f}%)")
-    
-    # Verifica che la somma sia corretta
-    total_check = X_train.shape[0] + X_val.shape[0] + X_test.shape[0]
-    print(f"\nVerifica totale righe: {total_check} (dovrebbe essere {total_rows})")
+    total_original = len(df)
+    print(f"\nVerifica totale pacchetti: {len(train_data) + len(val_data) + len(test_data)} / {total_original}")
     
     print(f"\nInizio preprocessing delle features...")
     
@@ -302,14 +455,29 @@ def preprocess_dataset(dataset_path, config_path, output_dir, useful_zone_percen
     print(f"- Validation: {val_path} ({df_val.shape[0]} righe, {df_val.shape[1]} colonne)")
     print(f"- Test: {test_path} ({df_test.shape[0]} righe, {df_test.shape[1]} colonne)")
     
-    # Stampa statistiche finali
-    print(f"\n--- STATISTICHE FINALI ---")
-    print(f"Distribuzione target nel validation set:")
-    print(df_val[target_column].value_counts().sort_index())
-    print(f"\nDistribuzione target nel test set:")
-    print(df_test[target_column].value_counts().sort_index())
-    print(f"\nDistribuzione target nel training set:")
-    print(df_train[target_column].value_counts().sort_index())
+    # Stampa statistiche finali sulla distribuzione degli attacchi
+    print(f"\n--- STATISTICHE FINALI DISTRIBUZIONE ATTACCHI ---")
+    
+    for name, dataset in [("Validation", df_val), ("Test", df_test), ("Training", df_train)]:
+        total = len(dataset)
+        
+        if dataset[target_column].dtype == 'object':
+            attacks = (dataset[target_column] != 'Benign').sum()
+        else:
+            attacks = (dataset[target_column] != 0).sum()
+        
+        benign = total - attacks
+        
+        print(f"\n{name} Set:")
+        print(f"  Totale: {total:,} pacchetti ({total/(len(df_train)+len(df_val)+len(df_test))*100:.1f}%)")
+        print(f"  Attacchi: {attacks:,} ({attacks/total*100:.2f}%)")
+        print(f"  Benigni: {benign:,} ({benign/total*100:.2f}%)")
+        
+        # Mostra distribuzione dettagliata se ci sono diverse classi
+        print(f"  Distribuzione dettagliata:")
+        value_counts = dataset[target_column].value_counts().sort_index()
+        for value, count in value_counts.items():
+            print(f"    {value}: {count:,} ({count/total*100:.2f}%)")
     
     return df_train, df_val, df_test, scaler, freq_mappings
 
@@ -318,5 +486,9 @@ if __name__ == "__main__":
         dataset_path="resources/datasets/NF-UNSW-NB15-v3.csv",
         config_path="config/dataset.json",
         output_dir="resources/datasets",
-        useful_zone_percentage=60
+        train_ratio=0.70,
+        val_ratio=0.15,
+        test_ratio=0.15,
+        min_window_size=10,
+        max_window_size=30
     )

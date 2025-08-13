@@ -161,8 +161,13 @@ def prepare_data(input_path: str, output_dir: str):
             dataset_path=input_path,
             config_path="config/dataset.json",
             output_dir=output_dir
-            # useful_zone_percentage=60
+            #train_ratio=0.70,
+            #val_ratio=0.15,
+            #test_ratio=0.15,
+            #min_window_size=10,
+            #max_window_size=30
         )
+        
         
         logger.info("✅ Preprocessing completato con successo!")
         

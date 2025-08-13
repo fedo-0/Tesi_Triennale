@@ -59,8 +59,9 @@ class ModelTrainer:
             return x + noise
         return x
     
+    """
     def train_epoch(self, train_loader, epoch):
-        """Addestra per una epoch"""
+        # Addestra per una epoch
         self.model.train()
         total_loss = 0
         correct = 0
@@ -110,7 +111,148 @@ class ModelTrainer:
         accuracy = 100. * correct / total
         
         return avg_loss, accuracy
-    
+    """
+    def train_epoch(self, train_loader, epoch):
+        """Addestra per una epoch - VERSIONE MIGLIORATA"""
+        self.model.train()
+        total_loss = 0
+        correct = 0
+        total = 0
+        
+        # Contatori per debug
+        total_actual_attacks = 0
+        total_predicted_attacks = 0
+        total_correct_attacks = 0
+        
+        progress_bar = tqdm(train_loader, desc=f"Training Epoch {epoch}")
+        
+        for batch_idx, (batch_x, batch_y) in enumerate(progress_bar):
+            batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+            
+            # Debug: controlla il primo batch di ogni epoca
+            if batch_idx == 0:
+                actual_attacks_in_batch = (batch_y == 1).sum().item()
+                logger.info(f"Primo batch epoca {epoch}: {actual_attacks_in_batch}/{len(batch_y)} attacchi")
+                if actual_attacks_in_batch == 0:
+                    logger.warning("⚠️  Il primo batch non contiene attacchi!")
+            
+            # Aggiungi rumore per regolarizzazione
+            if 'noise_factor' in self.hyperparams:
+                batch_x = self.add_noise_to_input(batch_x, self.hyperparams['noise_factor'])
+            
+            # Forward pass
+            self.optimizer.zero_grad()
+            outputs = self.model(batch_x).squeeze()
+            loss = self.criterion(outputs, batch_y)
+            
+            # Backward pass
+            loss.backward()
+            
+            # Gradient clipping per stabilità
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
+            self.optimizer.step()
+            
+            # Statistiche
+            total_loss += loss.item()
+            # Per BCEWithLogitsLoss, applichiamo sigmoid per le predizioni
+            probabilities = torch.sigmoid(outputs)
+            predicted = (probabilities > 0.5).float()
+            total += batch_y.size(0)
+            correct += (predicted == batch_y).sum().item()
+            
+            # Debug contatori
+            batch_actual_attacks = (batch_y == 1).sum().item()
+            batch_predicted_attacks = (predicted == 1).sum().item()
+            batch_correct_attacks = ((predicted == 1) & (batch_y == 1)).sum().item()
+            
+            total_actual_attacks += batch_actual_attacks
+            total_predicted_attacks += batch_predicted_attacks
+            total_correct_attacks += batch_correct_attacks
+            
+            # Aggiorna progress bar
+            progress_bar.set_postfix({
+                'Loss': f'{loss.item():.4f}',
+                'Acc': f'{100.*correct/total:.2f}%',
+                'Pred_Att': f'{batch_predicted_attacks}/{batch_actual_attacks}'
+            })
+            
+            # Log periodico per batch grandi
+            if batch_idx % 100 == 0 and batch_idx > 0:
+                logger.info(f'Epoch: {epoch}, Batch: {batch_idx}/{len(train_loader)}, '
+                           f'Loss: {loss.item():.4f}, Acc: {100.*correct/total:.2f}%, '
+                           f'Pred Attacks: {batch_predicted_attacks}/{batch_actual_attacks}')
+                
+                # Debug estremo: se non predice mai attacchi
+                if total_predicted_attacks == 0 and total_actual_attacks > 0:
+                    logger.warning(f"⚠️  Dopo {batch_idx} batch, il modello non ha ancora predetto NESSUN attacco!")
+                    logger.warning(f"Range probabilità: {probabilities.min():.4f} - {probabilities.max():.4f}")
+        
+        avg_loss = total_loss / len(train_loader)
+        accuracy = 100. * correct / total
+        
+        # Log statistiche finali dell'epoca
+        logger.info(f"Epoca {epoch} completata:")
+        logger.info(f"  Attacchi visti: {total_actual_attacks:,}")
+        logger.info(f"  Attacchi predetti: {total_predicted_attacks:,}")
+        logger.info(f"  Attacchi corretti: {total_correct_attacks:,}")
+        
+        if total_actual_attacks > 0:
+            attack_recall = total_correct_attacks / total_actual_attacks
+            logger.info(f"  Attack Recall: {attack_recall:.4f}")
+        
+        if total_predicted_attacks > 0:
+            attack_precision = total_correct_attacks / total_predicted_attacks
+            logger.info(f"  Attack Precision: {attack_precision:.4f}")
+        
+        return avg_loss, accuracy
+
+    def validate(self, val_loader):
+        """Valuta il modello sul validation set - VERSIONE MIGLIORATA"""
+        self.model.eval()
+        total_loss = 0
+        correct = 0
+        total = 0
+        all_predictions = []
+        all_targets = []
+        all_probabilities = []
+        
+        with torch.no_grad():
+            for batch_x, batch_y in val_loader:
+                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                
+                outputs = self.model(batch_x).squeeze()
+                loss = self.criterion(outputs, batch_y)
+                
+                total_loss += loss.item()
+                probabilities = torch.sigmoid(outputs)
+                predicted = (probabilities > 0.5).float()
+                total += batch_y.size(0)
+                correct += (predicted == batch_y).sum().item()
+                
+                all_predictions.extend(predicted.cpu().numpy())
+                all_targets.extend(batch_y.cpu().numpy())
+                all_probabilities.extend(probabilities.cpu().numpy())
+        
+        avg_loss = total_loss / len(val_loader)
+        accuracy = 100. * correct / total
+        
+        # Debug aggiuntivo per validation
+        predictions = np.array(all_predictions)
+        targets = np.array(all_targets)
+        probabilities = np.array(all_probabilities)
+        
+        actual_attacks = (targets == 1).sum()
+        predicted_attacks = (predictions == 1).sum()
+        
+        logger.info(f"Validation Debug:")
+        logger.info(f"  Attacchi nel validation: {actual_attacks}/{len(targets)}")
+        logger.info(f"  Attacchi predetti: {predicted_attacks}/{len(targets)}")
+        logger.info(f"  Range probabilità: {probabilities.min():.4f} - {probabilities.max():.4f}")
+        logger.info(f"  Prob media per attacchi: {probabilities[targets == 1].mean():.4f}")
+        logger.info(f"  Prob media per benigni: {probabilities[targets == 0].mean():.4f}")
+        
+        return avg_loss, accuracy, predictions, targets, probabilities
     def validate(self, val_loader):
         """Valuta il modello sul validation set"""
         self.model.eval()
