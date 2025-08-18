@@ -500,9 +500,37 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     if attack_col not in df.columns:
         raise ValueError(f"Colonna attack '{attack_col}' non trovata nel dataset!")
     
+    """
     # Split con micro-finestre (logica binaria per bilanciamento)
     feature_columns = [col for col in df.columns if col not in [label_col, attack_col]]
     
+    train_data, val_data, test_data = micro_window_split_multiclass(
+        df, label_col, attack_col, train_ratio, val_ratio, test_ratio, 
+        min_window_size, max_window_size
+    )
+    """
+
+    # CORREZIONE: Usa SOLO le features dal config, non tutte le colonne CSV
+    expected_features = numeric_columns + categorical_columns
+    print(f"\n--- CORREZIONE FEATURE COLUMNS ---")
+    print(f"Features da CSV (tutte): {len([col for col in df.columns if col not in [label_col, attack_col]])}")
+    print(f"Features da config: {len(expected_features)}")
+
+    # Verifica che le features dal config esistano nel dataset
+    missing_features = set(expected_features) - set(df.columns)
+    extra_features_in_csv = set(df.columns) - set(expected_features) - {label_col, attack_col}
+
+    if missing_features:
+        print(f"⚠️  Features mancanti nel CSV: {missing_features}")
+    if extra_features_in_csv:
+        print(f"📊 Features extra nel CSV (ignorate): {list(extra_features_in_csv)[:5]}... (total: {len(extra_features_in_csv)})")
+
+    # USA SOLO LE FEATURES DAL CONFIG
+    feature_columns = [col for col in expected_features if col in df.columns]
+
+    print(f"Features finali usate: {len(feature_columns)} (dovrebbero essere 48)")
+    print(f"✅ Match con config: {len(feature_columns) == len(expected_features)}")
+
     train_data, val_data, test_data = micro_window_split_multiclass(
         df, label_col, attack_col, train_ratio, val_ratio, test_ratio, 
         min_window_size, max_window_size

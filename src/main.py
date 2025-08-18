@@ -11,6 +11,7 @@ from data.outlier_stat import compare_outlier_impact_table
 from data.bin_preprocessing import preprocess_dataset_binary
 from data.multi_preprocessing import preprocess_dataset_multiclass
 from trainer.trainer_bin import main_pipeline_bin
+from trainer.trainer_multiclass import main_pipeline_multiclass
 import numpy as np
 
 setup_logging()
@@ -187,7 +188,7 @@ def run_binclassifier (model_size: str):
 
 def run_multiclassifier (model_size:str):
     logger.info("Preparando il classificatore multiclasse...")
-    #nome_funzione()
+    main_pipeline_multiclass(model_size="small")
     logger.info("✅ Training completato con successo!")
 
 
