@@ -14,173 +14,105 @@ import torch.nn.functional as F
 setup_logging()
 logger = logging.getLogger(__name__)
 
-class FocalLoss(nn.Module):
-    """Focal Loss per gestire sbilanciamento estremo"""
-    def __init__(self, alpha=1, gamma=2, weight=None):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.weight = weight
+class AggressiveAdaptiveFocalLoss(nn.Module):
+    """
+    Focal Loss MOLTO più aggressiva per classi estremamente rare
+    
+    Modifiche rispetto alla versione precedente:
+    1. Gamma più alto (3.0 invece di 2.0)
+    2. Alpha più estremo per classi rare
+    3. Penalty aggiuntiva quando il modello ignora completamente una classe
+    """
+    def __init__(self, gamma=3.0, class_freq=None, device='cpu'):
+        super(AggressiveAdaptiveFocalLoss, self).__init__()
+        self.gamma = gamma  # AUMENTATO da 2.0 a 3.0
+        self.device = device
         
+        if class_freq is not None:
+            total_samples = sum(class_freq.values())
+            alpha_values = []
+            
+            logger.info("🔥 Calcolo alpha AGGRESSIVO per classi estremamente rare:")
+            
+            for class_id in sorted(class_freq.keys()):
+                freq = class_freq[class_id]
+                percentage = freq / total_samples
+                
+                # Formula PIÙ AGGRESSIVA per classi rare
+                if percentage < 0.001:  # < 0.1%
+                    alpha_val = np.log(total_samples / freq) * 2.0 + 3.0  # Extra boost
+                elif percentage < 0.01:  # < 1%
+                    alpha_val = np.log(total_samples / freq) * 1.5 + 2.0
+                elif percentage < 0.05:  # < 5%
+                    alpha_val = np.log(total_samples / freq) + 1.5
+                else:  # Classi comuni
+                    alpha_val = 1.0
+                
+                alpha_values.append(alpha_val)
+                
+                logger.info(f"  Classe {class_id}: freq={freq:,} ({percentage:.4f}%) → alpha={alpha_val:.3f}")
+            
+            # NIENTE normalizzazione per mantenere pesi estremi
+            self.alpha = torch.tensor(alpha_values, dtype=torch.float32)
+            
+            logger.info(f"🎯 Alpha finali (NON normalizzati): {self.alpha}")
+        else:
+            self.alpha = None
+            
+        if self.alpha is not None:
+            self.alpha = self.alpha.to(device)
+    
     def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, weight=self.weight, reduction='none')
+        # Cross entropy standard
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
-        focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
-        return focal_loss.mean()
+        
+        # Focal loss con alpha aggressivo
+        if self.alpha is not None:
+            alpha_t = self.alpha[targets]
+            focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
+        else:
+            focal_loss = (1 - pt) ** self.gamma * ce_loss
+        
+        # PENALTY AGGIUNTIVA: se una classe è completamente ignorata
+        # Calcola probabilità predette per ogni classe
+        probs = F.softmax(inputs, dim=1)
+        
+        # Per ogni classe nel batch, verifica se ha probabilità troppo bassa
+        class_penalties = []
+        unique_classes = torch.unique(targets)
+        
+        for class_id in unique_classes:
+            class_mask = (targets == class_id)
+            if class_mask.any():
+                # Probabilità media predetta per questa classe sui suoi sample reali
+                avg_prob = probs[class_mask, class_id].mean()
+                
+                # Se la probabilità è troppo bassa, aggiungi penalty
+                if avg_prob < 0.01:  # Meno dell'1% di confidenza
+                    penalty = -torch.log(avg_prob + 1e-8) * self.alpha[class_id] * 0.5
+                    class_penalties.append(penalty)
+        
+        # Aggiungi penalty alla loss media
+        final_loss = focal_loss.mean()
+        if class_penalties:
+            penalty_loss = torch.stack(class_penalties).mean()
+            final_loss += penalty_loss
+        
+        return final_loss
 
 class NetworkTrafficMLPMulticlass(nn.Module):
     """
     Multi-Layer Perceptron per classificazione MULTICLASS di traffico di rete
-    BASATO sul modello binario di successo - CAMBIATE SOLO LE PARTI ESSENZIALI
     """
     def __init__(self, input_dim, config, n_classes, class_weights=None):
         super(NetworkTrafficMLPMulticlass, self).__init__()
         
         self.input_dim = input_dim
-        self.n_classes = n_classes  # NUOVO: Numero di classi
-        self.hidden_dim = config['embedding_dim']  # Identico al binario
-        self.num_layers = config['num_layers']  # Identico al binario
-        self.dropout = config['dropout']        # Identico al binario
-        
-        # Input validation
-        if self.num_layers < 2:
-            raise ValueError("num_layers deve essere almeno 2 (input + output)")
-        if self.n_classes < 2:
-            raise ValueError("n_classes deve essere almeno 2")
-        
-        # Lista per memorizzare i layer - IDENTICA AL BINARIO
-        layers = []
-        
-        # Primo layer: input -> hidden_dim - IDENTICO AL BINARIO
-        layers.append(nn.Linear(input_dim, self.hidden_dim))
-        layers.append(nn.ReLU())
-        layers.append(nn.BatchNorm1d(self.hidden_dim))
-        layers.append(nn.Dropout(self.dropout))
-        
-        # Layer intermedi: hidden_dim -> hidden_dim - IDENTICI AL BINARIO
-        for i in range(self.num_layers - 2):
-            # Dimensione decrescente per layer più profondi
-            next_hidden_dim = max(self.hidden_dim // (2 ** (i + 1)), 32)
-            
-            layers.append(nn.Linear(self.hidden_dim if i == 0 else prev_hidden_dim, next_hidden_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.BatchNorm1d(next_hidden_dim))
-            layers.append(nn.Dropout(self.dropout))
-            
-            prev_hidden_dim = next_hidden_dim
-        
-        # Layer finale: ultimo_hidden -> n_classes - UNICA MODIFICA CRITICA
-        final_input_dim = prev_hidden_dim if self.num_layers > 2 else self.hidden_dim
-        layers.append(nn.Linear(final_input_dim, self.n_classes))  # CAMBIATO: 1 -> n_classes
-        # NOTA: Niente Sigmoid/Softmax qui - useremo CrossEntropyLoss che include Softmax
-        
-        # Combina tutti i layer in un Sequential - IDENTICO AL BINARIO
-        self.network = nn.Sequential(*layers)
-        
-        # Inizializzazione dei pesi - IDENTICA AL BINARIO
-        self.apply(self._init_weights)
-        
-        # Salva class weights per riferimento - ADATTATO PER MULTICLASS
-        self.class_weights = class_weights
-        
-        # Conta parametri
-        total_params = sum(p.numel() for p in self.parameters())
-        logger.info(f"Modello MULTICLASS creato con {total_params:,} parametri per {n_classes} classi")
-    
-    def _init_weights(self, module):
-        """Inizializzazione dei pesi - IDENTICA AL BINARIO"""
-        if isinstance(module, nn.Linear):
-            torch.nn.init.xavier_uniform_(module.weight)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.BatchNorm1d):
-            torch.nn.init.ones_(module.weight)
-            torch.nn.init.zeros_(module.bias)
-    
-    def forward(self, x):
-        """Forward pass - IDENTICO AL BINARIO"""
-        return self.network(x)
-
-
-class NetworkTrafficDatasetMulticlass:
-    """Classe per gestire il caricamento dati MULTICLASS - ADATTATA DA BINARIO"""
-    
-    def __init__(self, config_path="config/dataset.json", hyperparams_path="config/hyperparameters.json", 
-                 model_size="small", metadata_path="resources/datasets/multiclass_metadata.json"):
-        self.metadata_path = metadata_path
-        self.load_configs(config_path, hyperparams_path, model_size)
-        
-    def load_configs(self, config_path, hyperparams_path, model_size="small"):
-        """Carica le configurazioni - IDENTICA AL BINARIO + METADATI MULTICLASS"""
-        with open(config_path, 'r') as f:
-            self.dataset_config = json.load(f)['dataset']
-        
-        with open(hyperparams_path, 'r') as f:
-            hyperparams_data = json.load(f)
-            self.hyperparams = hyperparams_data[model_size]
-        
-        # NUOVO: Carica metadati multiclass
-        with open(self.metadata_path, 'r') as f:
-            self.multiclass_metadata = json.load(f)
-            
-        self.feature_columns = self.multiclass_metadata['feature_columns']  # Da metadati multiclass
-        self.target_column = 'multiclass_target'  # Colonna target multiclass
-        self.n_classes = self.multiclass_metadata['n_classes']  # Numero classi
-        self.class_mapping = self.multiclass_metadata['class_mapping']  # Mapping classi
-        
-        logger.info(f"Feature columns loaded: {len(self.feature_columns)}")
-        logger.info(f"Target column: {self.target_column}")
-        logger.info(f"Number of classes: {self.n_classes}")
-        logger.info(f"Class mapping: {self.class_mapping}")
-    
-    def analyze_data_distribution_multiclass(self, df, set_name):
-        """Analizza la distribuzione multiclass - NUOVO"""
-        target_values = df[self.target_column].value_counts().sort_index()
-        total = len(df)
-        
-        logger.info(f"\n{set_name} Set Distribution (Multiclass):")
-        for class_idx, count in target_values.items():
-            class_name = self.multiclass_metadata['label_encoder_classes'][class_idx]
-            percentage = (count / total) * 100
-            logger.info(f"  {class_name} ({class_idx}): {count:,} ({percentage:.2f}%)")
-        
-        # Controlla se ci sono valori NaN o fuori range - IDENTICO AL BINARIO
-        if df[self.feature_columns].isnull().any().any():
-            logger.warning(f"⚠️  {set_name} set contiene valori NaN!")
-        
-        if np.isinf(df[self.feature_columns].values).any():
-            logger.warning(f"⚠️  {set_name} set contiene valori infiniti!")
-        
-        return target_values
-    
-    import torch
-import torch.nn as nn
-import pandas as pd
-import numpy as np
-import json
-import logging
-from utilities.logging_config import setup_logging
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.utils.class_weight import compute_class_weight
-
-# Setup logging
-setup_logging()
-logger = logging.getLogger(__name__)
-
-
-class NetworkTrafficMLPMulticlass(nn.Module):
-    """
-    Multi-Layer Perceptron per classificazione MULTICLASS di traffico di rete
-    BASATO sul modello binario di successo - CAMBIATE SOLO LE PARTI ESSENZIALI
-    """
-    def __init__(self, input_dim, config, n_classes, class_weights=None):
-        super(NetworkTrafficMLPMulticlass, self).__init__()
-        
-        self.input_dim = input_dim
-        self.n_classes = n_classes  # NUOVO: Numero di classi
-        self.hidden_dim = config['embedding_dim']  # Identico al binario
-        self.num_layers = config['num_layers']  # Identico al binario
-        self.dropout = config['dropout']        # Identico al binario
+        self.n_classes = n_classes
+        self.hidden_dim = config['embedding_dim']
+        self.num_layers = config['num_layers']
+        self.dropout = config['dropout']
         
         # Input validation
         if self.num_layers < 2:
@@ -197,38 +129,41 @@ class NetworkTrafficMLPMulticlass(nn.Module):
         layers.append(nn.BatchNorm1d(self.hidden_dim))
         layers.append(nn.Dropout(self.dropout))
         
-        # Layer intermedi: hidden_dim -> hidden_dim
+        # Layer intermedi: hidden_dim -> hidden_dim decrescente
+        prev_hidden_dim = self.hidden_dim
         for i in range(self.num_layers - 2):
-            # Dimensione decrescente per layer più profondi
             next_hidden_dim = max(self.hidden_dim // (2 ** (i + 1)), 32)
             
-            layers.append(nn.Linear(self.hidden_dim if i == 0 else prev_hidden_dim, next_hidden_dim))
+            layers.append(nn.Linear(prev_hidden_dim, next_hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.BatchNorm1d(next_hidden_dim))
             layers.append(nn.Dropout(self.dropout))
             
             prev_hidden_dim = next_hidden_dim
         
-        # Layer finale: ultimo_hidden -> n_classes - UNICA MODIFICA CRITICA
+        # Layer finale: ultimo_hidden -> n_classes
         final_input_dim = prev_hidden_dim if self.num_layers > 2 else self.hidden_dim
-        layers.append(nn.Linear(final_input_dim, self.n_classes))  # CAMBIATO: 1 -> n_classes
-        # NOTA: Niente Sigmoid/Softmax qui - useremo CrossEntropyLoss che include Softmax
+        layers.append(nn.Linear(final_input_dim, self.n_classes))
         
-        # Combina tutti i layer in un Sequential - IDENTICO AL BINARIO
+        # Combina tutti i layer
         self.network = nn.Sequential(*layers)
         
-        # Inizializzazione dei pesi - IDENTICA AL BINARIO
+        # Inizializzazione dei pesi
         self.apply(self._init_weights)
         
-        # Salva class weights per riferimento - ADATTATO PER MULTICLASS
+        # Salva class weights per riferimento
         self.class_weights = class_weights
         
-        # Conta parametri
+        # Log informazioni modello
         total_params = sum(p.numel() for p in self.parameters())
-        logger.info(f"Modello MULTICLASS creato con {total_params:,} parametri per {n_classes} classi")
+        logger.info(f"Modello MULTICLASS creato:")
+        logger.info(f"  Parametri totali: {total_params:,}")
+        logger.info(f"  Classi: {n_classes}")
+        logger.info(f"  Hidden dim: {self.hidden_dim}")
+        logger.info(f"  Layers: {self.num_layers}")
     
     def _init_weights(self, module):
-        """Inizializzazione dei pesi - IDENTICA AL BINARIO"""
+        """Inizializzazione dei pesi Xavier"""
         if isinstance(module, nn.Linear):
             torch.nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:
@@ -238,12 +173,12 @@ class NetworkTrafficMLPMulticlass(nn.Module):
             torch.nn.init.zeros_(module.bias)
     
     def forward(self, x):
-        """Forward pass - IDENTICO AL BINARIO"""
+        """Forward pass"""
         return self.network(x)
 
 
 class NetworkTrafficDatasetMulticlass:
-    """Classe per gestire il caricamento dati MULTICLASS - ADATTATA DA BINARIO"""
+    """Classe per gestire il caricamento dati MULTICLASS - VERSIONE CORRETTA"""
     
     def __init__(self, config_path="config/dataset.json", hyperparams_path="config/hyperparameters.json", 
                  model_size="small", metadata_path="resources/datasets/multiclass_metadata.json"):
@@ -251,30 +186,46 @@ class NetworkTrafficDatasetMulticlass:
         self.load_configs(config_path, hyperparams_path, model_size)
         
     def load_configs(self, config_path, hyperparams_path, model_size="small"):
-        """Carica le configurazioni - IDENTICA AL BINARIO + METADATI MULTICLASS"""
-        with open(config_path, 'r') as f:
-            self.dataset_config = json.load(f)['dataset']
+        """Carica le configurazioni"""
+        try:
+            with open(config_path, 'r') as f:
+                self.dataset_config = json.load(f)['dataset']
+        except:
+            logger.warning(f"Impossibile caricare {config_path}, usando config di default")
+            self.dataset_config = {}
         
-        with open(hyperparams_path, 'r') as f:
-            hyperparams_data = json.load(f)
-            self.hyperparams = hyperparams_data[model_size]
+        try:
+            with open(hyperparams_path, 'r') as f:
+                hyperparams_data = json.load(f)
+                self.hyperparams = hyperparams_data[model_size]
+        except:
+            logger.warning(f"Impossibile caricare {hyperparams_path}, usando hyperparams di default")
+            self.hyperparams = {
+                'batch_size': 256,
+                'lr': 0.001,
+                'weight_decay': 1e-4,
+                'embedding_dim': 128,
+                'num_layers': 3,
+                'dropout': 0.3
+            }
         
-        # NUOVO: Carica metadati multiclass
+        # Carica metadati multiclass
         with open(self.metadata_path, 'r') as f:
             self.multiclass_metadata = json.load(f)
             
-        self.feature_columns = self.multiclass_metadata['feature_columns']  # Da metadati multiclass
-        self.target_column = 'multiclass_target'  # NUOVO: Colonna target multiclass
-        self.n_classes = self.multiclass_metadata['n_classes']  # NUOVO: Numero classi
-        self.class_mapping = self.multiclass_metadata['class_mapping']  # NUOVO: Mapping classi
+        self.feature_columns = self.multiclass_metadata['feature_columns']
+        self.target_column = 'multiclass_target'
+        self.n_classes = self.multiclass_metadata['n_classes']
+        self.class_mapping = self.multiclass_metadata['class_mapping']
         
-        logger.info(f"Feature columns loaded: {len(self.feature_columns)}")
-        logger.info(f"Target column: {self.target_column}")
-        logger.info(f"Number of classes: {self.n_classes}")
-        logger.info(f"Class mapping: {self.class_mapping}")
+        logger.info(f"Configurazione caricata:")
+        logger.info(f"  Feature columns: {len(self.feature_columns)}")
+        logger.info(f"  Target column: {self.target_column}")
+        logger.info(f"  Classi: {self.n_classes}")
+        logger.info(f"  Hyperparams: {self.hyperparams}")
     
     def analyze_data_distribution_multiclass(self, df, set_name):
-        """Analizza la distribuzione multiclass - NUOVO"""
+        """Analizza la distribuzione multiclass - VERSIONE CORRETTA"""
         target_values = df[self.target_column].value_counts().sort_index()
         total = len(df)
         
@@ -284,135 +235,101 @@ class NetworkTrafficDatasetMulticlass:
             percentage = (count / total) * 100
             logger.info(f"  {class_name} ({class_idx}): {count:,} ({percentage:.2f}%)")
         
-        # CORREZIONE: Controlla solo colonne numeriche per NaN e infiniti
+        # Controlla solo feature numeriche per problemi
         numeric_features = []
+        problematic_features = []
+        
         for col in self.feature_columns:
             if col in df.columns:
-                # Verifica se la colonna è numerica
                 if pd.api.types.is_numeric_dtype(df[col]):
                     numeric_features.append(col)
+                    
+                    # Controlla NaN
+                    if df[col].isnull().any():
+                        problematic_features.append(f"{col} (NaN)")
+                    
+                    # Controlla infiniti
+                    if np.isinf(df[col]).any():
+                        problematic_features.append(f"{col} (Inf)")
                 else:
-                    logger.warning(f"⚠️  Colonna {col} non è numerica (tipo: {df[col].dtype})")
+                    problematic_features.append(f"{col} (non-numeric)")
+            else:
+                problematic_features.append(f"{col} (missing)")
         
-        if len(numeric_features) > 0:
-            # Controlla NaN solo su colonne numeriche
-            if df[numeric_features].isnull().any().any():
-                logger.warning(f"⚠️  {set_name} set contiene valori NaN in colonne numeriche!")
-            
-            # Controlla infiniti solo su colonne numeriche
-            try:
-                if np.isinf(df[numeric_features].values).any():
-                    logger.warning(f"⚠️  {set_name} set contiene valori infiniti!")
-            except TypeError as e:
-                logger.warning(f"⚠️  Impossibile verificare valori infiniti: {e}")
+        if problematic_features:
+            logger.warning(f"⚠️  {set_name} - Feature problematiche: {problematic_features[:5]}...")
         else:
-            logger.warning(f"⚠️  Nessuna colonna numerica trovata in {set_name} set!")
+            logger.info(f"✅ {set_name} - Tutte le feature sono valide")
         
         return target_values
     
     def load_data(self, train_path, val_path, test_path):
-        """Carica i dataset preprocessati multiclass - ADATTATA DA BINARIO"""
+        """Carica i dataset preprocessati multiclass - VERSIONE CORRETTA"""
         logger.info("Caricamento dataset multiclass...")
         
-        # Carica i CSV - IDENTICO AL BINARIO
+        # Carica i CSV
         self.df_train = pd.read_csv(train_path)
         self.df_val = pd.read_csv(val_path)
         self.df_test = pd.read_csv(test_path)
         
-        logger.info(f"Training set: {self.df_train.shape}")
-        logger.info(f"Validation set: {self.df_val.shape}")
-        logger.info(f"Test set: {self.df_test.shape}")
+        logger.info(f"Dataset caricati:")
+        logger.info(f"  Training: {self.df_train.shape}")
+        logger.info(f"  Validation: {self.df_val.shape}")
+        logger.info(f"  Test: {self.df_test.shape}")
         
-        # 🔍 DEBUG AGGIUNTO: Analizza le colonne prima di procedere
-        logger.info(f"\n=== DEBUG: ANALISI COLONNE ===")
-        logger.info(f"Colonne totali nel training set: {len(self.df_train.columns)}")
-        logger.info(f"Feature columns da metadati: {len(self.feature_columns)}")
-        
-        logger.info(f"\nTutte le colonne nel dataset:")
-        for i, col in enumerate(self.df_train.columns):
-            dtype = self.df_train[col].dtype
-            is_numeric = pd.api.types.is_numeric_dtype(self.df_train[col])
-            unique_count = self.df_train[col].nunique()
-            logger.info(f"  {i:2d}. {col:25s} | {str(dtype):15s} | numeric: {is_numeric} | unique: {unique_count}")
-        
-        logger.info(f"\nFeature columns dai metadati:")
-        problematic_cols = []
-        for i, col in enumerate(self.feature_columns):
-            if col in self.df_train.columns:
-                dtype = self.df_train[col].dtype
-                is_numeric = pd.api.types.is_numeric_dtype(self.df_train[col])
-                if not is_numeric:
-                    problematic_cols.append(col)
-                    logger.info(f"  ❌ {i:2d}. {col:25s} | {str(dtype):15s} | PROBLEMATICA!")
-                else:
-                    logger.info(f"  ✅ {i:2d}. {col:25s} | {str(dtype):15s} | OK")
-            else:
-                logger.info(f"  ⚠️  {i:2d}. {col:25s} | MANCANTE NEL DATASET!")
-        
-        if problematic_cols:
-            logger.error(f"🚨 TROVATE {len(problematic_cols)} COLONNE PROBLEMATICHE: {problematic_cols}")
-            logger.error("Queste colonne causano l'errore np.isinf()!")
-            
-            # Proponi correzione automatica
-            logger.info("🔧 CORREZIONE AUTOMATICA: Rimuovo colonne problematiche...")
-            self.feature_columns = [col for col in self.feature_columns 
-                                  if col not in problematic_cols and col in self.df_train.columns]
-            logger.info(f"Feature columns corrette: {len(self.feature_columns)}")
-        
-        logger.info(f"=== FINE DEBUG ===\n")
-        
-        # Analizza distribuzione multiclass - NUOVO
+        # Analizza distribuzione
         train_dist = self.analyze_data_distribution_multiclass(self.df_train, "Training")
         val_dist = self.analyze_data_distribution_multiclass(self.df_val, "Validation")
         test_dist = self.analyze_data_distribution_multiclass(self.df_test, "Test")
         
-        # Verifica che tutte le feature necessarie siano presenti - IDENTICO AL BINARIO
-        missing_features = set(self.feature_columns) - set(self.df_train.columns)
-        if missing_features:
-            raise ValueError(f"Feature mancanti nel dataset: {missing_features}")
+        # Verifica feature - VERSIONE MIGLIORATA
+        missing_features = []
+        invalid_features = []
         
-        # Estrai features e target - IDENTICO AL BINARIO TRANNE TARGET
+        for feature in self.feature_columns:
+            if feature not in self.df_train.columns:
+                missing_features.append(feature)
+            elif not pd.api.types.is_numeric_dtype(self.df_train[feature]):
+                invalid_features.append(feature)
+        
+        if missing_features:
+            raise ValueError(f"Feature mancanti: {missing_features}")
+        
+        if invalid_features:
+            logger.warning(f"Feature non-numeriche rimosse: {invalid_features}")
+            self.feature_columns = [f for f in self.feature_columns if f not in invalid_features]
+        
+        # Estrai features e target
         self.X_train = self.df_train[self.feature_columns].values.astype(np.float32)
         self.X_val = self.df_val[self.feature_columns].values.astype(np.float32)
         self.X_test = self.df_test[self.feature_columns].values.astype(np.float32)
         
-        # Target multiclass invece di binario - NUOVO
-        self.y_train = self.df_train[self.target_column].astype(np.int64)  # int64 per CrossEntropyLoss
+        self.y_train = self.df_train[self.target_column].astype(np.int64)
         self.y_val = self.df_val[self.target_column].astype(np.int64)
         self.y_test = self.df_test[self.target_column].astype(np.int64)
         
-        # Verifica che i target siano nel range corretto - NUOVO
+        # Verifica range target
         all_targets = np.concatenate([self.y_train, self.y_val, self.y_test])
         min_target, max_target = all_targets.min(), all_targets.max()
         
-        logger.info(f"Target range: {min_target} - {max_target} (expected: 0 - {self.n_classes-1})")
+        logger.info(f"Target range: {min_target} - {max_target} (atteso: 0 - {self.n_classes-1})")
         
         if min_target < 0 or max_target >= self.n_classes:
-            raise ValueError(f"Target values out of range! Found: {min_target}-{max_target}, Expected: 0-{self.n_classes-1}")
+            raise ValueError(f"Target fuori range! Trovato: {min_target}-{max_target}, Atteso: 0-{self.n_classes-1}")
         
-        # Calcola statistiche di bilanciamento per ogni classe - ADATTATO PER MULTICLASS
-        logger.info(f"\nDetailed Class Distribution:")
-        for set_name, y_data in [("Training", self.y_train), ("Validation", self.y_val), ("Test", self.y_test)]:
-            unique, counts = np.unique(y_data, return_counts=True)
-            logger.info(f"{set_name} set:")
-            for class_idx, count in zip(unique, counts):
-                class_name = self.multiclass_metadata['label_encoder_classes'][class_idx]
-                percentage = (count / len(y_data)) * 100
-                logger.info(f"  {class_name}: {count:,} ({percentage:.2f}%)")
-        
-        # CONTROLLO CRITICO: Verifica se tutte le classi sono presenti - NUOVO
+        # Verifica presenza di tutte le classi nel training
         unique_train_classes = set(self.y_train)
         expected_classes = set(range(self.n_classes))
         missing_classes = expected_classes - unique_train_classes
         
         if missing_classes:
-            logger.error(f"🚨 PROBLEMA CRITICO: Classi mancanti nel training set: {missing_classes}")
+            logger.error(f"🚨 Classi mancanti nel training set: {missing_classes}")
             for missing_class in missing_classes:
                 class_name = self.multiclass_metadata['label_encoder_classes'][missing_class]
-                logger.error(f"   Classe mancante: {class_name} (ID: {missing_class})")
+                logger.error(f"   Mancante: {class_name} (ID: {missing_class})")
             raise ValueError("Il training set deve contenere tutte le classi!")
         
-        # Calcola class weights per gestire sbilanciamento multiclass - NUOVO
+        # Calcola class weights standard (per compatibilità)
         try:
             class_weights = compute_class_weight(
                 'balanced',
@@ -420,16 +337,24 @@ class NetworkTrafficDatasetMulticlass:
                 y=self.y_train
             )
             self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
-            logger.info(f"Class weights calcolati: {class_weights}")
+            logger.info(f"Class weights standard: {class_weights}")
         except Exception as e:
             logger.warning(f"Impossibile calcolare class weights: {e}")
             self.class_weights = None
         
+        # NUOVO: Calcola frequenze per AdaptiveFocalLoss
+        self.class_freq = {}
+        unique, counts = np.unique(self.y_train, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            self.class_freq[class_id] = int(count)
+        
+        logger.info(f"Frequenze classi per AdaptiveFocalLoss: {self.class_freq}")
         logger.info(f"Input dimension: {self.X_train.shape[1]}")
-        return self.X_train.shape[1]  # Restituisce input_dim
+        
+        return self.X_train.shape[1]
     
     def create_dataloaders(self):
-        """Crea i DataLoader per PyTorch - IDENTICO AL BINARIO"""
+        """Crea i DataLoader per PyTorch - VERSIONE SEMPLIFICATA"""
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         
@@ -447,30 +372,13 @@ class NetworkTrafficDatasetMulticlass:
             torch.LongTensor(self.y_test)
         )
         
-        # Crea DataLoader
-        """
-        train_loader = DataLoader(
-            train_dataset, 
-            batch_size=batch_size, 
-            shuffle=True,
-            num_workers=4 if use_cuda else 2,
-            pin_memory=use_cuda,
-            persistent_workers=True if torch.get_num_threads() > 1 else False
-        )
-        """
-
+        # WeightedRandomSampler
         if self.class_weights is not None:
-            # Calcola pesi per ogni sample (più aggressivo)
+            # Calcola pesi per sample in modo più semplice
             sample_weights = []
-            class_weights_dict = {}
-            
-            # Crea dizionario pesi per classe
-            for i, weight in enumerate(self.class_weights):
-                class_weights_dict[i] = weight.item() * 2.0  # Amplifica x2
-            
-            # Assegna peso a ogni sample
             for target in self.y_train:
-                sample_weights.append(class_weights_dict[target])
+                weight = self.class_weights[target].item()
+                sample_weights.append(weight)
             
             sampler = WeightedRandomSampler(
                 weights=sample_weights,
@@ -481,51 +389,47 @@ class NetworkTrafficDatasetMulticlass:
             train_loader = DataLoader(
                 train_dataset, 
                 batch_size=batch_size, 
-                sampler=sampler,  # USA SAMPLER invece di shuffle
-                num_workers=4 if use_cuda else 2,
-                pin_memory=use_cuda,
-                persistent_workers=True if torch.get_num_threads() > 1 else False
+                sampler=sampler,
+                num_workers=2 if use_cuda else 0,
+                pin_memory=use_cuda
             )
-            logger.info("🎯 Usando WeightedRandomSampler AGGRESSIVO per bilanciamento")
+            logger.info("✅ Usando WeightedRandomSampler per training")
         else:
-            # Fallback normale
             train_loader = DataLoader(
                 train_dataset, 
                 batch_size=batch_size, 
                 shuffle=True,
-                num_workers=4 if use_cuda else 2,
-                pin_memory=use_cuda,
-                persistent_workers=True if torch.get_num_threads() > 1 else False
+                num_workers=2 if use_cuda else 0,
+                pin_memory=use_cuda
             )
-        
+            logger.info("ℹ️  Usando shuffle normale per training")
+
         val_loader = DataLoader(
             val_dataset, 
             batch_size=batch_size, 
             shuffle=False,
-            num_workers=2 if use_cuda else 1,
-            pin_memory=use_cuda,
-            persistent_workers=True if torch.get_num_threads() > 1 else False
+            num_workers=1 if use_cuda else 0,
+            pin_memory=use_cuda
         )
         test_loader = DataLoader(
             test_dataset, 
             batch_size=batch_size, 
             shuffle=False,
-            num_workers=2 if use_cuda else 1,
-            pin_memory=use_cuda,
-            persistent_workers=True if torch.get_num_threads() > 1 else False
+            num_workers=1 if use_cuda else 0,
+            pin_memory=use_cuda
         )
         
-        logger.info(f"DataLoaders multiclass creati:")
-        logger.info(f"  Train: {len(train_loader)} batch di {batch_size} (shuffle=True)")
-        logger.info(f"  Validation: {len(val_loader)} batch di {batch_size} (shuffle=False)")
-        logger.info(f"  Test: {len(test_loader)} batch di {batch_size} (shuffle=False)")
+        logger.info(f"DataLoaders creati:")
+        logger.info(f"  Train: {len(train_loader)} batch di {batch_size}")
+        logger.info(f"  Val: {len(val_loader)} batch di {batch_size}")
+        logger.info(f"  Test: {len(test_loader)} batch di {batch_size}")
         
         return train_loader, val_loader, test_loader
 
 
 def save_model_multiclass(model, hyperparams, feature_columns, filepath, 
-                         n_classes, class_mapping, class_weights=None):
-    """Salva il modello multiclass e la configurazione - ADATTATO DA BINARIO"""
+                         n_classes, class_mapping, class_weights=None, class_freq=None):
+    """Salva il modello multiclass e la configurazione"""
     torch.save({
         'model_state_dict': model.state_dict(),
         'hyperparams': hyperparams,
@@ -534,67 +438,26 @@ def save_model_multiclass(model, hyperparams, feature_columns, filepath,
         'n_classes': n_classes,
         'class_mapping': class_mapping,
         'class_weights': class_weights,
+        'class_freq': class_freq,  # NUOVO: salva anche frequenze
         'model_type': 'multiclass'
     }, filepath)
     logger.info(f"Modello multiclass salvato in: {filepath}")
 
 
 def load_model_multiclass(filepath, device='cpu'):
-    """Carica il modello multiclass salvato - ADATTATO DA BINARIO"""
+    """Carica il modello multiclass salvato"""
     checkpoint = torch.load(filepath, map_location=device)
     
-    # Verifica che sia un modello multiclass
     if checkpoint.get('model_type') != 'multiclass':
         logger.warning("⚠️  Questo non sembra essere un modello multiclass!")
     
-    # Ricrea il modello
     model = NetworkTrafficMLPMulticlass(
         checkpoint['input_dim'], 
         checkpoint['hyperparams'],
-        checkpoint['n_classes'],                    # NUOVO
+        checkpoint['n_classes'],
         checkpoint.get('class_weights', None)
     )
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     
     return model, checkpoint['hyperparams'], checkpoint['feature_columns'], checkpoint['class_mapping']
-
-
-# Classe per debugging multiclass
-class ModelDebuggerMulticlass:
-    """Utility per debug del modello multiclass durante training"""
-    
-    @staticmethod
-    def analyze_batch_predictions_multiclass(model, batch_x, batch_y, device, class_names):
-        """Analizza le predizioni di un batch per debug multiclass"""
-        model.eval()
-        with torch.no_grad():
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            outputs = model(batch_x)
-            probabilities = torch.softmax(outputs, dim=1)  # CAMBIATO: softmax invece di sigmoid
-            predictions = torch.argmax(probabilities, dim=1)  # CAMBIATO: argmax invece di threshold
-            
-            # Statistiche per classe
-            n_classes = len(class_names)
-            for class_idx in range(n_classes):
-                actual_count = (batch_y == class_idx).sum().item()
-                predicted_count = (predictions == class_idx).sum().item()
-                correct_count = ((predictions == class_idx) & (batch_y == class_idx)).sum().item()
-                
-                if actual_count > 0 or predicted_count > 0:
-                    logger.info(f"Classe {class_names[class_idx]} ({class_idx}):")
-                    logger.info(f"  Actual: {actual_count}, Predicted: {predicted_count}, Correct: {correct_count}")
-            
-            # Statistiche generali
-            total_correct = (predictions == batch_y).sum().item()
-            total_samples = len(batch_y)
-            accuracy = total_correct / total_samples
-            
-            logger.info(f"Batch Accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
-        
-        model.train()
-        return {
-            'predictions': predictions.cpu().numpy(),
-            'probabilities': probabilities.cpu().numpy(),
-            'accuracy': accuracy
-        }

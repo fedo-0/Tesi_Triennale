@@ -10,72 +10,38 @@ import seaborn as sns
 from tqdm import tqdm
 from datetime import datetime
 
+from utilities.logging_config import setup_logging
 from model.model_multiclass import NetworkTrafficMLPMulticlass, NetworkTrafficDatasetMulticlass, save_model_multiclass
-from model.model_multiclass import FocalLoss
+from model.model_multiclass import AggressiveAdaptiveFocalLoss
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
 class ModelTrainerMulticlass:
-    """Classe per gestire l'addestramento del modello MULTICLASS"""
+    """Versione CORRETTA del tuo trainer con AdaptiveFocalLoss"""
     
-    def __init__(self, model, hyperparams, device, n_classes, class_names, class_weights=None):
+    def __init__(self, model, hyperparams, device, n_classes, class_names, class_weights=None, class_freq=None):
         self.model = model.to(device)
         self.hyperparams = hyperparams
         self.device = device
         self.n_classes = n_classes
         self.class_names = class_names
+        self.class_freq = class_freq  # NUOVO: frequenze per AdaptiveFocalLoss
         
-        # Optimizer
+        # Optimizer - IDENTICO al tuo
         self.optimizer = optim.Adam(
             model.parameters(),
             lr=hyperparams['lr'],
-            weight_decay=hyperparams['weight_decay']
+            weight_decay=hyperparams.get('weight_decay', 1e-4)
         )
-        """
-        if class_weights is not None:
-            class_weights = class_weights.to(device)
-            # Usa class weights MODERATI invece di amplificati
-            moderate_weights = class_weights.clone()
-            
-            # Identifica l'indice di Benign (dovrebbe essere 2 dal tuo debug)
-            benign_idx = 2  # Dall'analisi: Benign (2): 95.91%
-            moderate_weights[benign_idx] = 1.0  # Benign peso normale
-            
-            # Limita i pesi delle altre classi a massimo 5x (invece di moltiplicare)
-            for i in range(len(moderate_weights)):
-                if i != benign_idx:  # Non Benign
-                    moderate_weights[i] = min(moderate_weights[i], 5.0)  # Cap a massimo 5x
-            
-            self.criterion = nn.CrossEntropyLoss(weight=moderate_weights)
-            logger.info(f"Usando CrossEntropyLoss con pesi MODERATI: {moderate_weights}")
-        else:
-            self.criterion = nn.CrossEntropyLoss()
-            logger.info("Usando CrossEntropyLoss senza class weights")
-        """
         
-        if class_weights is not None:
-            class_weights = class_weights.to(device)
-            # Usa Focal Loss con pesi moderati
-            moderate_weights = class_weights.clone()
-            
-            benign_idx = 2  # Benign dal debug
-            moderate_weights[benign_idx] = 1.0
-            
-            for i in range(len(moderate_weights)):
-                if i != benign_idx:
-                    moderate_weights[i] = min(moderate_weights[i], 3.0)  # Ancora più moderato per Focal Loss
-            
-            self.criterion = FocalLoss(alpha=1, gamma=2, weight=moderate_weights)
-            logger.info(f"Usando FocalLoss con pesi moderati: {moderate_weights}")
-        else:
-            self.criterion = FocalLoss(alpha=1, gamma=2)
-            logger.info("Usando FocalLoss senza class weights")
+        # MODIFICATO: Setup loss function migliorata
+        #self.setup_loss_function(class_freq, class_weights, device)
+        self.setup_aggressive_loss_function(class_freq, class_weights, device)
         
-        
-        # Scheduler
+        # Scheduler - IDENTICO al tuo
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.5, patience=10, verbose=True
         )
@@ -85,7 +51,70 @@ class ModelTrainerMulticlass:
         self.val_losses = []
         self.val_accuracies = []
         self.learning_rates = []
+    
+    def setup_loss_function(self, class_freq, class_weights, device):
+        """NUOVO: Setup intelligente della loss function"""
         
+        # Strategia: usa AdaptiveFocalLoss se abbiamo frequenze, altrimenti fallback
+        if class_freq is not None:
+            self.criterion = AggressiveAdaptiveFocalLoss(
+                gamma=3.0,
+                class_freq=class_freq,
+                device=device
+            )
+            logger.info("✅ Usando AggressiveAdaptiveFocalLoss con frequenze classi")
+            
+        elif class_weights is not None:
+            # Fallback: CrossEntropyLoss con pesi moderati
+            moderate_weights = class_weights.clone()
+            
+            # Identifica Benign (classe 2 dal tuo debug)
+            benign_idx = 2
+            moderate_weights[benign_idx] = 1.0
+            
+            # Modera gli altri pesi (max 3x invece di valori estremi)
+            for i in range(len(moderate_weights)):
+                if i != benign_idx:
+                    moderate_weights[i] = min(moderate_weights[i], 3.0)
+            
+            self.criterion = nn.CrossEntropyLoss(weight=moderate_weights.to(device))
+            logger.info(f"✅ Usando CrossEntropyLoss con pesi moderati: {moderate_weights}")
+            
+        else:
+            # Fallback: loss standard
+            self.criterion = nn.CrossEntropyLoss()
+            logger.info("ℹ️  Usando CrossEntropyLoss standard")
+
+    def setup_aggressive_loss_function(self, class_freq, class_weights, device):
+        """Setup loss aggressiva per il tuo caso specifico"""
+        
+        if class_freq is not None:
+            # USA LA VERSIONE AGGRESSIVA
+            self.criterion = AggressiveAdaptiveFocalLoss(
+                gamma=3.0,  # PIÙ AGGRESSIVO
+                class_freq=class_freq,
+                device=device
+            )
+            logger.info("🔥 Usando AggressiveAdaptiveFocalLoss (gamma=3.0)")
+            
+        else:
+            # Fallback con CrossEntropy e pesi MOLTO aggressivi
+            if class_weights is not None:
+                aggressive_weights = class_weights.clone()
+                
+                # Per classi estremamente rare: pesi fino a 20x
+                for i, weight in enumerate(aggressive_weights):
+                    if weight > 5.0:  # Classi rare
+                        aggressive_weights[i] = min(weight * 2.0, 20.0)  # Fino a 20x
+                    
+                self.criterion = nn.CrossEntropyLoss(weight=aggressive_weights.to(device))
+                logger.info(f"🎯 CrossEntropyLoss con pesi AGGRESSIVI: {aggressive_weights}")
+            else:
+                self.criterion = nn.CrossEntropyLoss()
+        
+        logger.info(f"Loss configurata per dataset con sbilanciamento estremo")
+
+
     def add_noise_to_input(self, x, noise_factor):
         """Aggiunge rumore gaussiano all'input - IDENTICO AL BINARIO"""
         if self.model.training and noise_factor > 0:
@@ -94,13 +123,13 @@ class ModelTrainerMulticlass:
         return x
     
     def train_epoch(self, train_loader, epoch):
-        """Addestra per una epoch - ADATTATO PER MULTICLASS"""
+        """Training epoch - MODIFICATO per logging migliorato"""
         self.model.train()
         total_loss = 0
         correct = 0
         total = 0
         
-        # Contatori per classe
+        # Contatori per classe - IDENTICO al tuo
         class_correct = np.zeros(self.n_classes)
         class_total = np.zeros(self.n_classes)
         class_predicted = np.zeros(self.n_classes)
@@ -110,45 +139,45 @@ class ModelTrainerMulticlass:
         for batch_idx, (batch_x, batch_y) in enumerate(progress_bar):
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             
-            # Debug: controlla il primo batch di ogni epoca
+            # Debug primo batch - IDENTICO al tuo
             if batch_idx == 0:
                 unique_classes, counts = torch.unique(batch_y, return_counts=True)
-                logger.info(f"Primo batch epoca {epoch}: classi presenti {unique_classes.cpu().numpy()} con counts {counts.cpu().numpy()}")
+                logger.info(f"Primo batch epoca {epoch}: classi {unique_classes.cpu().numpy()} con counts {counts.cpu().numpy()}")
             
-            # Aggiungi rumore
+            # Rumore - IDENTICO al tuo
             if 'noise_factor' in self.hyperparams:
                 batch_x = self.add_noise_to_input(batch_x, self.hyperparams['noise_factor'])
             
-            # Forward pass
+            # Forward pass - IDENTICO al tuo
             self.optimizer.zero_grad()
             outputs = self.model(batch_x)
             loss = self.criterion(outputs, batch_y)
             
-            # Backward pass
+            # Backward pass - IDENTICO al tuo
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
-            # Statistichs
+            # Statistiche - IDENTICO al tuo
             total_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += batch_y.size(0)
             correct += (predicted == batch_y).sum().item()
             
-            # Statistiche per classe
+            # Statistiche per classe - IDENTICO al tuo
             for class_idx in range(self.n_classes):
                 class_mask = (batch_y == class_idx)
                 class_total[class_idx] += class_mask.sum().item()
                 class_correct[class_idx] += ((predicted == class_idx) & class_mask).sum().item()
                 class_predicted[class_idx] += (predicted == class_idx).sum().item()
             
-            # Aggiorna progress bar
+            # Progress bar - IDENTICO al tuo
             progress_bar.set_postfix({
                 'Loss': f'{loss.item():.4f}',
                 'Acc': f'{100.*correct/total:.2f}%'
             })
             
-            # Log periodico
+            # Log periodico - IDENTICO al tuo
             if batch_idx % 100 == 0 and batch_idx > 0:
                 logger.info(f'Epoch: {epoch}, Batch: {batch_idx}/{len(train_loader)}, '
                            f'Loss: {loss.item():.4f}, Acc: {100.*correct/total:.2f}%')
@@ -156,16 +185,57 @@ class ModelTrainerMulticlass:
         avg_loss = total_loss / len(train_loader)
         accuracy = 100. * correct / total
         
-        # Log statistiche per classe
+        # MODIFICATO: Log più leggibile per classi problematiche
         logger.info(f"Epoca {epoch} completata - Statistiche per classe:")
+        
+        class_metrics = []
         for class_idx in range(self.n_classes):
             if class_total[class_idx] > 0:
                 class_recall = class_correct[class_idx] / class_total[class_idx]
                 class_precision = class_correct[class_idx] / class_predicted[class_idx] if class_predicted[class_idx] > 0 else 0
-                logger.info(f"  {self.class_names[class_idx]}: Visti={int(class_total[class_idx])}, "
-                           f"Predetti={int(class_predicted[class_idx])}, Corretti={int(class_correct[class_idx])}, "
-                           f"Recall={class_recall:.3f}, Precision={class_precision:.3f}")
-        
+                
+                # Calcola F1 score
+                if class_recall + class_precision > 0:
+                    class_f1 = 2 * (class_precision * class_recall) / (class_precision + class_recall)
+                else:
+                    class_f1 = 0.0
+                
+                class_metrics.append({
+                    'name': self.class_names[class_idx],
+                    'f1': class_f1,
+                    'recall': class_recall,
+                    'precision': class_precision,
+                    'visti': int(class_total[class_idx]),
+                    'predetti': int(class_predicted[class_idx]),
+                    'corretti': int(class_correct[class_idx])
+                })
+
+        # Ordina per F1 (peggiori prima)
+        class_metrics.sort(key=lambda x: x['f1'])
+
+        # Mostra tutte le classi con F1
+        for cls in class_metrics:
+            # Emoji basato su F1 score
+            if cls['f1'] < 0.3:
+                emoji = "🔴"  # Critico
+            elif cls['f1'] < 0.5:
+                emoji = "🟡"  # Problematico  
+            elif cls['f1'] < 0.8:
+                emoji = "🟢"  # Buono
+            else:
+                emoji = "✅"  # Ottimo
+            
+            logger.info(f"  {emoji} {cls['name']:15s}: "
+                    f"F1={cls['f1']:.3f} | "
+                    f"R={cls['recall']:.3f} | "
+                    f"P={cls['precision']:.3f} | "
+                    f"Visti={cls['visti']:4d}")
+
+        # Calcola F1 macro
+        macro_f1 = sum(cls['f1'] for cls in class_metrics) / len(class_metrics)
+        critical_count = len([cls for cls in class_metrics if cls['f1'] < 0.2])
+        logger.info(f"  📈 F1 Macro: {macro_f1:.3f} | Classi critiche: {critical_count}")
+
         return avg_loss, accuracy
     
     def validate(self, val_loader):
@@ -446,43 +516,40 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
     
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
-
 def main_pipeline_multiclass(model_size="small"):
-    """Funzione principale per l'addestramento MULTICLASSE"""
-    # Configura device
+    """Versione migliorata della tua funzione main con AdaptiveFocalLoss"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
     if torch.cuda.is_available():
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     try:
-        # Inizializza dataset manager MULTICLASS
+        # Dataset manager - IDENTICO al tuo
         dataset_manager = NetworkTrafficDatasetMulticlass(
             model_size=model_size,
             metadata_path="resources/datasets/multiclass_metadata.json"
         )
         
-        # Carica i dati MULTICLASS
+        # Carica dati - IDENTICO al tuo
         input_dim = dataset_manager.load_data(
             train_path="resources/datasets/train_multiclass.csv",
             val_path="resources/datasets/val_multiclass.csv",
             test_path="resources/datasets/test_multiclass.csv"
         )
         
-        # Crea DataLoader
+        # Crea DataLoaders - IDENTICO al tuo
         train_loader, val_loader, test_loader = dataset_manager.create_dataloaders()
         
-        # Inizializza modello MULTICLASS
+        # Modello - IDENTICO al tuo
         model = NetworkTrafficMLPMulticlass(
             input_dim, 
             dataset_manager.hyperparams,
             dataset_manager.n_classes,
             class_weights=dataset_manager.class_weights
         )
-        logger.info(f"Modello MULTICLASS creato con {sum(p.numel() for p in model.parameters())} parametri")
+        logger.info(f"Modello creato con {sum(p.numel() for p in model.parameters()):,} parametri")
         
-        # Inizializza trainer MULTICLASS
+        # MODIFICATO: Trainer con AdaptiveFocalLoss
         class_names = dataset_manager.multiclass_metadata['label_encoder_classes']
         trainer = ModelTrainerMulticlass(
             model, 
@@ -490,52 +557,55 @@ def main_pipeline_multiclass(model_size="small"):
             device,
             dataset_manager.n_classes,
             class_names,
-            class_weights=dataset_manager.class_weights
+            class_weights=dataset_manager.class_weights,
+            class_freq=dataset_manager.class_freq  # NUOVO: passa frequenze
         )
         
-        # Addestra il modello
+        # Training - IDENTICO al tuo
         trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
         
-        # Plotta la storia dell'addestramento
+        # Plot training history - IDENTICO al tuo
+        import os
         os.makedirs("plots", exist_ok=True)
-        trainer.plot_training_history('plots/training_history_multiclass.png')
+        trainer.plot_training_history('plots/training_history_adaptive_focal.png')
         
-        # Valuta sul test set
         accuracy, precision, recall, f1, predictions, targets, probabilities = evaluate_model_multiclass(
             trained_model, test_loader, device, class_names
         )
         
-        # Salva il modello MULTICLASS
+        # Salvataggio - IDENTICO al tuo ma con class_freq
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_path = f"models/mlp_multiclass_{timestamp}.pth"
+        model_path = f"models/mlp_multiclass_adaptive_focal_{timestamp}.pth"
         os.makedirs("models", exist_ok=True)
-        save_model_multiclass(
-            trained_model, 
-            dataset_manager.hyperparams, 
-            dataset_manager.feature_columns, 
-            model_path,
-            dataset_manager.n_classes,
-            dataset_manager.class_mapping,
-            class_weights=dataset_manager.class_weights
-        )
+        
+        # MODIFICATO: Salva anche class_freq
+        torch.save({
+            'model_state_dict': trained_model.state_dict(),
+            'hyperparams': dataset_manager.hyperparams,
+            'feature_columns': dataset_manager.feature_columns,
+            'input_dim': input_dim,
+            'n_classes': dataset_manager.n_classes,
+            'class_mapping': dataset_manager.class_mapping,
+            'class_weights': dataset_manager.class_weights,
+            'class_freq': dataset_manager.class_freq,  # NUOVO
+            'model_type': 'multiclass_adaptive_focal'  # NUOVO
+        }, model_path)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"ADDESTRAMENTO MULTICLASS COMPLETATO!")
+        logger.info(f"🎯 ADDESTRAMENTO COMPLETATO")
         logger.info(f"{'='*60}")
-        logger.info(f"Migliori metriche:")
-        logger.info(f"  Accuracy: {accuracy:.4f}")
-        logger.info(f"  Weighted F1: {f1:.4f}")
-        logger.info(f"  Classes: {dataset_manager.n_classes}")
-        logger.info(f"Modello salvato in: {model_path}")
+        logger.info(f"Accuracy: {accuracy:.4f}")
+        logger.info(f"Weighted F1: {f1:.4f}")
+        logger.info(f"Modello salvato: {model_path}")
+        logger.info(f"Plot salvato: plots/training_history_adaptive_focal.png")
         
         return trained_model, accuracy, f1
         
     except Exception as e:
-        logger.error(f"Errore durante l'addestramento multiclass: {str(e)}")
+        logger.error(f"Errore durante training: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
-
 
 if __name__ == "__main__":
     main_pipeline_multiclass(model_size="small")
