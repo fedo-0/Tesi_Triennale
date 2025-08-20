@@ -2,6 +2,7 @@ import sys
 import logging
 
 import pandas as pd
+import numpy as np
 #import matplotlib
 
 from utilities.logging_config import setup_logging
@@ -12,7 +13,6 @@ from data.bin_preprocessing import preprocess_dataset_binary
 from data.multi_preprocessing import preprocess_dataset_multiclass
 from trainer.trainer_bin import main_pipeline_bin
 from trainer.trainer_multiclass import main_pipeline_multiclass
-import numpy as np
 
 setup_logging()
 logger = logging.getLogger(__name__)

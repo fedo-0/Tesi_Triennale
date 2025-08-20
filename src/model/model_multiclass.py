@@ -377,7 +377,7 @@ class NetworkTrafficDatasetMulticlass:
             # Calcola pesi per sample in modo più semplice
             sample_weights = []
             for target in self.y_train:
-                weight = self.class_weights[target].item()
+                weight = self.class_weights[target].item()**0.5
                 sample_weights.append(weight)
             
             sampler = WeightedRandomSampler(

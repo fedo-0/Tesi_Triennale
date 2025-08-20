@@ -1,9 +1,11 @@
+import torch
 import pandas as pd
 import numpy as np
 import json
 import os
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from collections import defaultdict, Counter
+from imblearn.over_sampling import SMOTE
 
 def load_dataset_config(config_path="config/dataset.json"):
     """Carica la configurazione del dataset"""
@@ -90,7 +92,6 @@ def minmax_scaling_transform(df, scaler, numeric_cols_present):
         df_scaled[numeric_cols_present] = scaler.transform(df_scaled[numeric_cols_present])
     
     return df_scaled
-
 
 def analyze_multiclass_distribution(df, label_col='Label', attack_col='Attack'):
     """
@@ -450,6 +451,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     """
     
     print("PREPROCESSING MULTICLASSE CON MICRO-FINESTRE TEMPORALI")
+    print("CON SMOTE!!!")
     print("=" * 70)
     print("Versione: Autonoma e completa per classificazione multiclasse")
     print(f"Strategia: Bilanciamento binario + Output multiclasse")
@@ -550,13 +552,72 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     X_train = train_data_encoded[feature_columns].copy()
     X_val = val_data_encoded[feature_columns].copy()
     X_test = test_data_encoded[feature_columns].copy()
-    
+
     # Target multiclass (invece di binario)
     y_train = train_data_encoded['multiclass_target'].copy()
     y_val = val_data_encoded['multiclass_target'].copy()
     y_test = test_data_encoded['multiclass_target'].copy()
-    
+
     print(f"\nVerifica totale pacchetti: {len(train_data) + len(val_data) + len(test_data):,} / {len(df):,}")
+
+    # *** NUOVO: APPLICA SMOTE AL TRAINING SET ***
+    print(f"\n--- APPLICAZIONE SMOTE ---")
+
+    # Mostra distribuzione prima di SMOTE
+    original_dist = Counter(y_train)
+    print(f"Distribuzione PRIMA di SMOTE:")
+    for class_id, count in sorted(original_dist.items()):
+        percentage = count / len(y_train) * 100
+        print(f"  Classe {class_id}: {count:,} ({percentage:.2f}%)")
+
+    # Calcola strategia SMOTE (porta classi piccole al 20% della maggiore)
+    max_samples = max(original_dist.values())
+    target_min = int(max_samples * 0.2)  # 20% della classe maggiore
+
+    sampling_strategy = {}
+    for class_id, count in original_dist.items():
+        if count < target_min:
+            sampling_strategy[class_id] = target_min
+
+    print(f"\nStrategia SMOTE (target: {target_min:,} sample minimi):")
+    for class_id, target in sampling_strategy.items():
+        original = original_dist[class_id]
+        multiplier = target / original
+        print(f"  Classe {class_id}: {original:,} → {target:,} (x{multiplier:.1f})")
+
+    # Applica SMOTE
+    try:
+        min_class_size = min(original_dist.values())
+        k_neighbors = min(5, max(1, min_class_size - 1))
+        
+        print(f"\nApplicando SMOTE (k_neighbors={k_neighbors})...")
+        smote = SMOTE(
+            sampling_strategy=sampling_strategy,
+            random_state=42,
+            k_neighbors=k_neighbors
+        )
+        
+        X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+        
+        # Mostra risultato
+        smote_dist = Counter(y_train_smote)
+        print(f"\nDistribuzione DOPO SMOTE:")
+        for class_id, count in sorted(smote_dist.items()):
+            percentage = count / len(y_train_smote) * 100
+            original = original_dist[class_id]
+            multiplier = count / original
+            print(f"  Classe {class_id}: {count:,} ({percentage:.2f}%) - x{multiplier:.1f}")
+        
+        print(f"\n✅ SMOTE completato!")
+        print(f"Dataset training: {len(y_train):,} → {len(y_train_smote):,} (+{len(y_train_smote) - len(y_train):,})")
+        
+        # Usa dati SMOTE per il resto del preprocessing
+        X_train = X_train_smote.copy()
+        y_train = y_train_smote.copy()
+        
+    except Exception as e:
+        print(f"❌ Errore SMOTE: {e}")
+        print("Continuando senza SMOTE...")
     
     # Preprocessing features (IDENTICO AL BINARIO)
     print(f"\n--- PREPROCESSING FEATURES ---")
@@ -595,9 +656,9 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     os.makedirs(output_dir, exist_ok=True)
     
     # Salva dataset
-    train_path = os.path.join(output_dir, "train_multiclass.csv")
-    val_path = os.path.join(output_dir, "val_multiclass.csv")
-    test_path = os.path.join(output_dir, "test_multiclass.csv")
+    train_path = os.path.join(output_dir, "train_multiclass_smote.csv")
+    val_path = os.path.join(output_dir, "val_multiclass_smote.csv")
+    test_path = os.path.join(output_dir, "test_multiclass_smote.csv")
     
     df_train.to_csv(train_path, index=False)
     df_val.to_csv(val_path, index=False)
@@ -619,12 +680,12 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
         'preprocessing_version': 'multiclass_v1.0'
     }
     
-    metadata_path = os.path.join(output_dir, "multiclass_metadata.json")
+    metadata_path = os.path.join(output_dir, "multiclass_metadata_smote.json")
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     
     # Salva anche i mapping e scaler per riuso
-    mappings_path = os.path.join(output_dir, "multiclass_mappings.json")
+    mappings_path = os.path.join(output_dir, "multiclass_mappings_smote.json")
     mappings_data = {
         'freq_mappings': freq_mappings,
         'class_mapping': class_mapping,
@@ -636,7 +697,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     
     # Salva scaler (formato pickle)
     import pickle
-    scaler_path = os.path.join(output_dir, "multiclass_scaler.pkl")
+    scaler_path = os.path.join(output_dir, "multiclass_scaler_smote.pkl")
     with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
     

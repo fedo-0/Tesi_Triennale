@@ -527,14 +527,18 @@ def main_pipeline_multiclass(model_size="small"):
         # Dataset manager - IDENTICO al tuo
         dataset_manager = NetworkTrafficDatasetMulticlass(
             model_size=model_size,
-            metadata_path="resources/datasets/multiclass_metadata.json"
+            #metadata_path="resources/datasets/multiclass_metadata.json"
+            metadata_path="resources/datasets/multiclass_metadata_smote.json"
         )
         
         # Carica dati - IDENTICO al tuo
         input_dim = dataset_manager.load_data(
-            train_path="resources/datasets/train_multiclass.csv",
-            val_path="resources/datasets/val_multiclass.csv",
-            test_path="resources/datasets/test_multiclass.csv"
+            #train_path="resources/datasets/train_multiclass.csv",
+            #val_path="resources/datasets/val_multiclass.csv",
+            #test_path="resources/datasets/test_multiclass.csv"
+            train_path="resources/datasets/train_multiclass_smote.csv",
+            val_path="resources/datasets/val_multiclass_smote.csv",
+            test_path="resources/datasets/test_multiclass_smote.csv"
         )
         
         # Crea DataLoaders - IDENTICO al tuo
