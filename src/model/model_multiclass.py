@@ -7,7 +7,6 @@ import logging
 from utilities.logging_config import setup_logging
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.utils.class_weight import compute_class_weight
-from torch.utils.data import WeightedRandomSampler
 import torch.nn.functional as F
 
 # Setup logging
@@ -372,37 +371,13 @@ class NetworkTrafficDatasetMulticlass:
             torch.LongTensor(self.y_test)
         )
         
-        # WeightedRandomSampler
-        if self.class_weights is not None:
-            # Calcola pesi per sample in modo più semplice
-            sample_weights = []
-            for target in self.y_train:
-                weight = self.class_weights[target].item()
-                sample_weights.append(weight)
-            
-            sampler = WeightedRandomSampler(
-                weights=sample_weights,
-                num_samples=len(self.y_train),
-                replacement=True
-            )
-            
-            train_loader = DataLoader(
-                train_dataset, 
-                batch_size=batch_size, 
-                sampler=sampler,
-                num_workers=2 if use_cuda else 0,
-                pin_memory=use_cuda
-            )
-            logger.info("✅ Usando WeightedRandomSampler per training")
-        else:
-            train_loader = DataLoader(
-                train_dataset, 
-                batch_size=batch_size, 
-                shuffle=True,
-                num_workers=2 if use_cuda else 0,
-                pin_memory=use_cuda
-            )
-            logger.info("ℹ️  Usando shuffle normale per training")
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            num_workers=2 if use_cuda else 0,
+            pin_memory=use_cuda
+        )
 
         val_loader = DataLoader(
             val_dataset, 

@@ -123,69 +123,85 @@ class ModelTrainerMulticlass:
         return x
     
     def train_epoch(self, train_loader, epoch):
-        """Training epoch - MODIFICATO per logging migliorato"""
+        """Training epoch con logging ottimizzato"""
         self.model.train()
         total_loss = 0
         correct = 0
         total = 0
         
-        # Contatori per classe - IDENTICO al tuo
+        # Contatori per classe
         class_correct = np.zeros(self.n_classes)
         class_total = np.zeros(self.n_classes)
         class_predicted = np.zeros(self.n_classes)
+        
+        total_batches = len(train_loader)
+        log_interval_batches = max(1, total_batches // 10)
+        next_log_batch = log_interval_batches
         
         progress_bar = tqdm(train_loader, desc=f"Training Epoch {epoch}")
         
         for batch_idx, (batch_x, batch_y) in enumerate(progress_bar):
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             
-            # Debug primo batch - IDENTICO al tuo
             if batch_idx == 0:
                 unique_classes, counts = torch.unique(batch_y, return_counts=True)
                 logger.info(f"Primo batch epoca {epoch}: classi {unique_classes.cpu().numpy()} con counts {counts.cpu().numpy()}")
             
-            # Rumore - IDENTICO al tuo
             if 'noise_factor' in self.hyperparams:
                 batch_x = self.add_noise_to_input(batch_x, self.hyperparams['noise_factor'])
             
-            # Forward pass - IDENTICO al tuo
+            # Forward pass
             self.optimizer.zero_grad()
             outputs = self.model(batch_x)
             loss = self.criterion(outputs, batch_y)
             
-            # Backward pass - IDENTICO al tuo
+            # Backward pass
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
-            # Statistiche - IDENTICO al tuo
+            # Statistiche
             total_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += batch_y.size(0)
             correct += (predicted == batch_y).sum().item()
             
-            # Statistiche per classe - IDENTICO al tuo
+            # Statistiche per classe
             for class_idx in range(self.n_classes):
                 class_mask = (batch_y == class_idx)
                 class_total[class_idx] += class_mask.sum().item()
                 class_correct[class_idx] += ((predicted == class_idx) & class_mask).sum().item()
                 class_predicted[class_idx] += (predicted == class_idx).sum().item()
             
-            # Progress bar - IDENTICO al tuo
+            current_progress = (batch_idx + 1) / total_batches * 100
             progress_bar.set_postfix({
+                'Progress': f'{current_progress:.1f}%',
                 'Loss': f'{loss.item():.4f}',
                 'Acc': f'{100.*correct/total:.2f}%'
             })
             
-            # Log periodico - IDENTICO al tuo
-            if batch_idx % 100 == 0 and batch_idx > 0:
-                logger.info(f'Epoch: {epoch}, Batch: {batch_idx}/{len(train_loader)}, '
-                           f'Loss: {loss.item():.4f}, Acc: {100.*correct/total:.2f}%')
+            should_log = (
+                batch_idx == 0 or  # Primo batch
+                batch_idx + 1 == total_batches or  # Ultimo batch
+                batch_idx + 1 >= next_log_batch  # Ogni 10%
+            )
+            
+            if should_log:
+                avg_loss_so_far = total_loss / (batch_idx + 1)
+                accuracy_so_far = 100. * correct / total
+                
+                logger.info(f'Epoch {epoch} - {current_progress:.1f}% completato '
+                        f'({batch_idx + 1:,}/{total_batches:,} batch) | '
+                        f'Loss: {avg_loss_so_far:.4f} | '
+                        f'Acc: {accuracy_so_far:.2f}%')
+                
+                if batch_idx + 1 < total_batches:
+                    next_log_batch += log_interval_batches
         
         avg_loss = total_loss / len(train_loader)
         accuracy = 100. * correct / total
         
-        # MODIFICATO: Log più leggibile per classi problematiche
+        # Log finale per classe
         logger.info(f"Epoca {epoch} completata - Statistiche per classe:")
         
         class_metrics = []
