@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
-from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 def load_dataset_config(config_path="config/dataset.json"):
     """Carica la configurazione del dataset"""
@@ -33,19 +33,9 @@ def frequency_encoding_transform(df, freq_mappings):
     
     return df_encoded
 
-def log1p_transform(df, numeric_columns):
-    """Applica trasformazione log1p alle colonne numeriche"""
-    df_transformed = df.copy()
-    
-    for col in numeric_columns:
-        if col in df_transformed.columns:
-            df_transformed[col] = np.log1p(df_transformed[col].clip(lower=0))
-    
-    return df_transformed
-
-def minmax_scaling_fit(df_train, numeric_columns):
-    """Fit dello scaler solo sul training set"""
-    scaler = MinMaxScaler()
+def standard_scaling_fit(df_train, numeric_columns):
+    """Fit dello StandardScaler solo sul training set"""
+    scaler = StandardScaler()
     numeric_cols_present = [col for col in numeric_columns if col in df_train.columns]
     
     if numeric_cols_present:
@@ -53,8 +43,8 @@ def minmax_scaling_fit(df_train, numeric_columns):
     
     return scaler, numeric_cols_present
 
-def minmax_scaling_transform(df, scaler, numeric_cols_present):
-    """Applica il transform usando lo scaler già fittato"""
+def standard_scaling_transform(df, scaler, numeric_cols_present):
+    """Applica il transform usando lo StandardScaler già fittato"""
     df_scaled = df.copy()
     
     if numeric_cols_present:
@@ -369,7 +359,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
                                  train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
                                  min_window_size=10, max_window_size=30,
                                  label_col='Label', attack_col='Attack',
-                                 min_samples_per_class=5000):
+                                 min_samples_per_class=10000):
     """
     Funzione principale per preprocessing multiclasse con micro-finestre - MEMORY OPTIMIZED
     """
@@ -485,22 +475,14 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     
     del X_train, X_val, X_test
     
-    # 2. Trasformazione log1p
-    print("Applicazione trasformazione log1p...")
-    X_train_log = log1p_transform(X_train_encoded, numeric_columns)
-    X_val_log = log1p_transform(X_val_encoded, numeric_columns)
-    X_test_log = log1p_transform(X_test_encoded, numeric_columns)
+    # 2. Standard scaling
+    print("Applicazione Standard scaling...")
+    scaler, numeric_cols_present = standard_scaling_fit(X_train_encoded, numeric_columns)
+    X_train_scaled = standard_scaling_transform(X_train_encoded, scaler, numeric_cols_present)
+    X_val_scaled = standard_scaling_transform(X_val_encoded, scaler, numeric_cols_present)
+    X_test_scaled = standard_scaling_transform(X_test_encoded, scaler, numeric_cols_present)
     
     del X_train_encoded, X_val_encoded, X_test_encoded
-    
-    # 3. MinMax scaling
-    print("Applicazione MinMax scaling...")
-    scaler, numeric_cols_present = minmax_scaling_fit(X_train_log, numeric_columns)
-    X_train_scaled = minmax_scaling_transform(X_train_log, scaler, numeric_cols_present)
-    X_val_scaled = minmax_scaling_transform(X_val_log, scaler, numeric_cols_present)
-    X_test_scaled = minmax_scaling_transform(X_test_log, scaler, numeric_cols_present)
-    
-    del X_train_log, X_val_log, X_test_log
     
     # Ricombina features e target
     df_train = X_train_scaled.copy()
@@ -597,5 +579,5 @@ if __name__ == "__main__":
         max_window_size=30,
         label_col='Label',
         attack_col='Attack',
-        min_samples_per_class=5000
+        min_samples_per_class=10000
     )
