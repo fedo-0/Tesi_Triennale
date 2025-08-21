@@ -13,92 +13,6 @@ import torch.nn.functional as F
 setup_logging()
 logger = logging.getLogger(__name__)
 
-class AggressiveAdaptiveFocalLoss(nn.Module):
-    """
-    Focal Loss MOLTO più aggressiva per classi estremamente rare
-    
-    Modifiche rispetto alla versione precedente:
-    1. Gamma più alto (3.0 invece di 2.0)
-    2. Alpha più estremo per classi rare
-    3. Penalty aggiuntiva quando il modello ignora completamente una classe
-    """
-    def __init__(self, gamma=3.0, class_freq=None, device='cpu'):
-        super(AggressiveAdaptiveFocalLoss, self).__init__()
-        self.gamma = gamma  # AUMENTATO da 2.0 a 3.0
-        self.device = device
-        
-        if class_freq is not None:
-            total_samples = sum(class_freq.values())
-            alpha_values = []
-            
-            logger.info("🔥 Calcolo alpha AGGRESSIVO per classi estremamente rare:")
-            
-            for class_id in sorted(class_freq.keys()):
-                freq = class_freq[class_id]
-                percentage = freq / total_samples
-                
-                # Formula PIÙ AGGRESSIVA per classi rare
-                if percentage < 0.001:  # < 0.1%
-                    alpha_val = np.log(total_samples / freq) * 2.0 + 3.0  # Extra boost
-                elif percentage < 0.01:  # < 1%
-                    alpha_val = np.log(total_samples / freq) * 1.5 + 2.0
-                elif percentage < 0.05:  # < 5%
-                    alpha_val = np.log(total_samples / freq) + 1.5
-                else:  # Classi comuni
-                    alpha_val = 1.0
-                
-                alpha_values.append(alpha_val)
-                
-                logger.info(f"  Classe {class_id}: freq={freq:,} ({percentage:.4f}%) → alpha={alpha_val:.3f}")
-            
-            # NIENTE normalizzazione per mantenere pesi estremi
-            self.alpha = torch.tensor(alpha_values, dtype=torch.float32)
-            
-            logger.info(f"🎯 Alpha finali (NON normalizzati): {self.alpha}")
-        else:
-            self.alpha = None
-            
-        if self.alpha is not None:
-            self.alpha = self.alpha.to(device)
-    
-    def forward(self, inputs, targets):
-        # Cross entropy standard
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        
-        # Focal loss con alpha aggressivo
-        if self.alpha is not None:
-            alpha_t = self.alpha[targets]
-            focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
-        else:
-            focal_loss = (1 - pt) ** self.gamma * ce_loss
-        
-        # PENALTY AGGIUNTIVA: se una classe è completamente ignorata
-        # Calcola probabilità predette per ogni classe
-        probs = F.softmax(inputs, dim=1)
-        
-        # Per ogni classe nel batch, verifica se ha probabilità troppo bassa
-        class_penalties = []
-        unique_classes = torch.unique(targets)
-        
-        for class_id in unique_classes:
-            class_mask = (targets == class_id)
-            if class_mask.any():
-                # Probabilità media predetta per questa classe sui suoi sample reali
-                avg_prob = probs[class_mask, class_id].mean()
-                
-                # Se la probabilità è troppo bassa, aggiungi penalty
-                if avg_prob < 0.01:  # Meno dell'1% di confidenza
-                    penalty = -torch.log(avg_prob + 1e-8) * self.alpha[class_id] * 0.5
-                    class_penalties.append(penalty)
-        
-        # Aggiungi penalty alla loss media
-        final_loss = focal_loss.mean()
-        if class_penalties:
-            penalty_loss = torch.stack(class_penalties).mean()
-            final_loss += penalty_loss
-        
-        return final_loss
 
 class NetworkTrafficMLPMulticlass(nn.Module):
     """
@@ -177,7 +91,7 @@ class NetworkTrafficMLPMulticlass(nn.Module):
 
 
 class NetworkTrafficDatasetMulticlass:
-    """Classe per gestire il caricamento dati MULTICLASS - VERSIONE CORRETTA"""
+    """Classe per gestire il caricamento dati MULTICLASS"""
     
     def __init__(self, config_path="config/dataset.json", hyperparams_path="config/hyperparameters.json", 
                  model_size="small", metadata_path="resources/datasets/multiclass_metadata.json"):
@@ -336,18 +250,19 @@ class NetworkTrafficDatasetMulticlass:
                 y=self.y_train
             )
             self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
-            logger.info(f"Class weights standard: {class_weights}")
+            logger.info(f"Class weights standard (NON IN USO): {class_weights}")
         except Exception as e:
             logger.warning(f"Impossibile calcolare class weights: {e}")
             self.class_weights = None
         
-        # NUOVO: Calcola frequenze per AdaptiveFocalLoss
-        self.class_freq = {}
-        unique, counts = np.unique(self.y_train, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            self.class_freq[class_id] = int(count)
+        # Calcola frequenze per funzione di Loss - PUO SERVIRE PER UPGRADARE LA LOSS
+        #self.class_freq = {}
+        #unique, counts = np.unique(self.y_train, return_counts=True)
+        #for class_id, count in zip(unique, counts):
+        #    self.class_freq[class_id] = int(count)
+        #logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
         
-        logger.info(f"Frequenze classi per AdaptiveFocalLoss: {self.class_freq}")
+        self.class_freq = None
         logger.info(f"Input dimension: {self.X_train.shape[1]}")
         
         return self.X_train.shape[1]
