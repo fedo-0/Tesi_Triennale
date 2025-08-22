@@ -119,6 +119,73 @@ def filter_rare_classes(df, attack_col='Attack', min_samples=5000):
         print(f"✅ Nessuna classe da rimuovere (tutte hanno ≥ {min_samples:,} campioni)")
         return df.copy(), []
 
+def undersample_benign_class(df, attack_col='Attack', undersample_ratio=0.5):
+    """
+    Undersampling parziale della classe Benign mantenendo l'ordine temporale
+    """
+    print(f"\n--- UNDERSAMPLING PARZIALE CLASSE BENIGN ({undersample_ratio*100:.0f}% riduzione) ---")
+    
+    initial_samples = len(df)
+    
+    # Identifica classe benigna
+    benign_mask = df[attack_col].str.lower().isin(['benign', 'normal'])
+    attack_mask = ~benign_mask
+    
+    benign_count = benign_mask.sum()
+    attack_count = attack_mask.sum()
+    
+    print(f"Distribuzione originale:")
+    print(f"  Benign: {benign_count:,} ({benign_count/initial_samples*100:.2f}%)")
+    print(f"  Attack: {attack_count:,} ({attack_count/initial_samples*100:.2f}%)")
+    
+    if benign_count == 0:
+        print("⚠️  Nessun campione benigno trovato, nessun undersampling applicato")
+        return df.copy(), 0
+    
+    # Calcola quanti campioni benign mantenere
+    benign_to_keep = int(benign_count * (1 - undersample_ratio))
+    benign_to_remove = benign_count - benign_to_keep
+    
+    print(f"\nUndersampling Benign:")
+    print(f"  Da mantenere: {benign_to_keep:,}")
+    print(f"  Da rimuovere: {benign_to_remove:,}")
+    
+    # Trova indici dei campioni benigni
+    benign_indices = df[benign_mask].index.tolist()
+    
+    # Undersampling UNIFORME mantenendo ordine temporale
+    # Prendi ogni N-esimo campione benigno per distribuzione uniforme nel tempo
+    step = benign_count / benign_to_keep
+    indices_to_keep = []
+    
+    for i in range(benign_to_keep):
+        idx_position = int(i * step)
+        if idx_position < len(benign_indices):
+            indices_to_keep.append(benign_indices[idx_position])
+    
+    # Crea il dataset sottocampionato
+    # Mantieni tutti gli attacchi + sottocampione benigni selezionati
+    attack_indices = df[attack_mask].index.tolist()
+    final_indices = sorted(attack_indices + indices_to_keep)  # Mantieni ordine temporale
+    
+    df_undersampled = df.loc[final_indices].copy()
+    df_undersampled.reset_index(drop=True, inplace=True)
+    
+    # Statistiche finali
+    final_samples = len(df_undersampled)
+    final_benign = (df_undersampled[attack_col].str.lower().isin(['benign', 'normal'])).sum()
+    final_attack = final_samples - final_benign
+    
+    print(f"\n📊 Risultato undersampling:")
+    print(f"  Campioni totali: {initial_samples:,} → {final_samples:,} (-{initial_samples - final_samples:,})")
+    print(f"  Benign: {benign_count:,} → {final_benign:,} (-{benign_count - final_benign:,})")
+    print(f"  Attack: {attack_count:,} → {final_attack:,} (invariato)")
+    print(f"  Riduzione totale: {((initial_samples - final_samples)/initial_samples)*100:.2f}%")
+    print(f"  Nuova distribuzione Benign: {final_benign/final_samples*100:.2f}%")
+    print(f"  Nuova distribuzione Attack: {final_attack/final_samples*100:.2f}%")
+    
+    return df_undersampled, benign_to_remove
+
 def create_multiclass_encoding(df_train, attack_col='Attack', label_col='Label'):
     """Crea l'encoding per le classi multiclass basandosi solo sul training set"""
     print(f"\n--- CREAZIONE ENCODING MULTICLASS ---")
@@ -359,7 +426,8 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
                                  train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
                                  min_window_size=10, max_window_size=30,
                                  label_col='Label', attack_col='Attack',
-                                 min_samples_per_class=10000):
+                                 min_samples_per_class=10000,
+                                 benign_undersample_ratio=0.5):
     """
     Funzione principale per preprocessing multiclasse con micro-finestre - MEMORY OPTIMIZED
     """
@@ -417,6 +485,14 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     feature_columns = [col for col in expected_features if col in df.columns]
     
     print(f"\nFeatures utilizzate: {len(feature_columns)} di {len(expected_features)} configurate")
+
+    # Undersampling dei pacchetti benign
+    df_undersampled, removed_benign_count = undersample_benign_class(df, attack_col, undersample_ratio=benign_undersample_ratio)
+
+    if removed_benign_count:
+        print(f"\n⚠️  Dataset ha subito un undersampling dei benigni: rimosse {(removed_benign_count)} pacchetti benigni")
+        # Aggiorna il DataFrame di lavoro
+        df = df_undersampled
 
     # Rimuovo tutte le classi con meno dei sample minimi stabiliti
     df_filtered, removed_classes = filter_rare_classes(df, attack_col, min_samples=min_samples_per_class)
@@ -508,6 +584,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     df_val.to_csv(val_path, index=False)
     df_test.to_csv(test_path, index=False)
     
+
     # Salva metadati
     metadata = {
         'label_encoder_classes': label_encoder.classes_.tolist(),
@@ -523,6 +600,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
         'max_window_size': max_window_size,
         'removed_rare_classes': removed_classes,
         'min_samples_threshold': min_samples_per_class,
+        'benign_undersample_ratio': benign_undersample_ratio,
         'preprocessing_version': 'multiclass_v2.0_memory_optimized'
     }
     

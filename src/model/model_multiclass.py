@@ -242,7 +242,7 @@ class NetworkTrafficDatasetMulticlass:
                 logger.error(f"   Mancante: {class_name} (ID: {missing_class})")
             raise ValueError("Il training set deve contenere tutte le classi!")
         
-        # Calcola class weights standard (per compatibilità)
+        # Calcola class weights standard
         try:
             class_weights = compute_class_weight(
                 'balanced',
@@ -250,25 +250,24 @@ class NetworkTrafficDatasetMulticlass:
                 y=self.y_train
             )
             self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
-            logger.info(f"Class weights standard (NON IN USO): {class_weights}")
+            logger.info(f"Class weights standard: {class_weights}")
         except Exception as e:
             logger.warning(f"Impossibile calcolare class weights: {e}")
             self.class_weights = None
         
-        # Calcola frequenze per funzione di Loss - PUO SERVIRE PER UPGRADARE LA LOSS
-        #self.class_freq = {}
-        #unique, counts = np.unique(self.y_train, return_counts=True)
-        #for class_id, count in zip(unique, counts):
-        #    self.class_freq[class_id] = int(count)
-        #logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
+        # Calcola frequenze per funzione di Loss
+        self.class_freq = {}
+        unique, counts = np.unique(self.y_train, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            self.class_freq[class_id] = int(count)
+        logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
         
-        self.class_freq = None
         logger.info(f"Input dimension: {self.X_train.shape[1]}")
         
         return self.X_train.shape[1]
     
     def create_dataloaders(self):
-        """Crea i DataLoader per PyTorch - VERSIONE SEMPLIFICATA"""
+        """Crea i DataLoader per PyTorch"""
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         
