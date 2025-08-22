@@ -25,8 +25,6 @@ class ModelTrainerMulticlass:
         self.device = device
         self.n_classes = n_classes
         self.class_names = class_names
-        self.class_weights = class_weights
-        self.class_freq = class_freq
         
         # Optimizer
         self.optimizer = optim.Adam(
@@ -36,19 +34,8 @@ class ModelTrainerMulticlass:
         )
         
         # Funzione di Loss
-        #self.criterion = nn.CrossEntropyLoss()
-        #logger.info("✅ Usando CrossEntropyLoss standard")
-
-        if class_weights is not None:
-            # Usa i pesi calcolati automaticamente
-            weights_tensor = class_weights.to(device)
-            self.criterion = nn.CrossEntropyLoss(weight=weights_tensor)
-            logger.info("✅ Usando CrossEntropyLoss con class weights")
-            logger.info(f"   Pesi applicati: {weights_tensor.cpu().numpy()}")
-        else:
-            # Fallback a loss standard
-            self.criterion = nn.CrossEntropyLoss()
-            logger.info("⚠️  Class weights non disponibili, usando CrossEntropyLoss standard")
+        self.criterion = nn.CrossEntropyLoss()
+        logger.info("✅ Usando CrossEntropyLoss standard")
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -175,7 +162,7 @@ class ModelTrainerMulticlass:
         # Ordina per F1 (peggiori prima)
         class_metrics.sort(key=lambda x: x['f1'])
 
-        # Mostra tutte le classi con F1
+        # Mostra classi con F1
         for cls in class_metrics:
             # Emoji basato su F1 score
             if cls['f1'] < 0.3:
@@ -293,7 +280,7 @@ class ModelTrainerMulticlass:
                 best_val_loss = val_loss
                 patience_counter = 0
                 best_model_state = self.model.state_dict().copy()
-                logger.info("✓ Nuovo miglior modello salvato!")
+                logger.info("âœ“ Nuovo miglior modello salvato!")
             else:
                 patience_counter += 1
                 logger.info(f"Patience: {patience_counter}/{patience}")
@@ -436,7 +423,7 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
     cm_percent = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
-            if cm[i, j] > 0:  # Solo se c'è almeno un campione
+            if cm[i, j] > 0:  # Solo se c'Ã¨ almeno un campione
                 plt.text(j+0.5, i+0.7, f'({cm_percent[i, j]:.1%})', 
                         ha='center', va='center', fontsize=8, color='red')
     
@@ -478,7 +465,7 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
 def main_pipeline_multiclass(model_size="small"):
-
+    """Versione migliorata della tua funzione main con CrossEntropyLoss"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
     if torch.cuda.is_available():
@@ -510,7 +497,7 @@ def main_pipeline_multiclass(model_size="small"):
         )
         logger.info(f"Modello creato con {sum(p.numel() for p in model.parameters()):,} parametri")
         
-
+        # MODIFICATO: Trainer SENZA class_freq
         class_names = dataset_manager.multiclass_metadata['label_encoder_classes']
         trainer = ModelTrainerMulticlass(
             model, 
@@ -518,8 +505,8 @@ def main_pipeline_multiclass(model_size="small"):
             device,
             dataset_manager.n_classes,
             class_names,
-            class_weights=dataset_manager.class_weights,
-            class_freq=dataset_manager.class_freq
+            #class_weights=dataset_manager.class_weights,
+            #class_freq=dataset_manager.class_freq  # NUOVO: passa frequenze
         )
         
         # Training
@@ -552,7 +539,7 @@ def main_pipeline_multiclass(model_size="small"):
         }, model_path)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"🎯 ADDESTRAMENTO COMPLETATO")
+        logger.info(f"ðŸŽ¯ ADDESTRAMENTO COMPLETATO")
         logger.info(f"{'='*60}")
         logger.info(f"Accuracy: {accuracy:.4f}")
         logger.info(f"Weighted F1: {f1:.4f}")

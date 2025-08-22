@@ -170,7 +170,7 @@ class NetworkTrafficDatasetMulticlass:
                 problematic_features.append(f"{col} (missing)")
         
         if problematic_features:
-            logger.warning(f"⚠️  {set_name} - Feature problematiche: {problematic_features[:5]}...")
+            logger.warning(f"âš ï¸  {set_name} - Feature problematiche: {problematic_features[:5]}...")
         else:
             logger.info(f"✅ {set_name} - Tutte le feature sono valide")
         
@@ -236,13 +236,13 @@ class NetworkTrafficDatasetMulticlass:
         missing_classes = expected_classes - unique_train_classes
         
         if missing_classes:
-            logger.error(f"🚨 Classi mancanti nel training set: {missing_classes}")
+            logger.error(f"ðŸš¨ Classi mancanti nel training set: {missing_classes}")
             for missing_class in missing_classes:
                 class_name = self.multiclass_metadata['label_encoder_classes'][missing_class]
                 logger.error(f"   Mancante: {class_name} (ID: {missing_class})")
             raise ValueError("Il training set deve contenere tutte le classi!")
         
-        # Calcola class weights standard
+        # Calcola class weights standard (per compatibilitÃ )
         try:
             class_weights = compute_class_weight(
                 'balanced',
@@ -250,24 +250,25 @@ class NetworkTrafficDatasetMulticlass:
                 y=self.y_train
             )
             self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
-            logger.info(f"Class weights standard: {class_weights}")
+            logger.info(f"Class weights standard (NON IN USO): {class_weights}")
         except Exception as e:
             logger.warning(f"Impossibile calcolare class weights: {e}")
             self.class_weights = None
         
-        # Calcola frequenze per funzione di Loss
-        self.class_freq = {}
-        unique, counts = np.unique(self.y_train, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            self.class_freq[class_id] = int(count)
-        logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
+        # Calcola frequenze per funzione di Loss - PUO SERVIRE PER UPGRADARE LA LOSS
+        #self.class_freq = {}
+        #unique, counts = np.unique(self.y_train, return_counts=True)
+        #for class_id, count in zip(unique, counts):
+        #    self.class_freq[class_id] = int(count)
+        #logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
         
+        self.class_freq = None
         logger.info(f"Input dimension: {self.X_train.shape[1]}")
         
         return self.X_train.shape[1]
     
     def create_dataloaders(self):
-        """Crea i DataLoader per PyTorch"""
+        """Crea i DataLoader per PyTorch - VERSIONE SEMPLIFICATA"""
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         
@@ -338,7 +339,7 @@ def load_model_multiclass(filepath, device='cpu'):
     checkpoint = torch.load(filepath, map_location=device)
     
     if checkpoint.get('model_type') != 'multiclass':
-        logger.warning("⚠️  Questo non sembra essere un modello multiclass!")
+        logger.warning("🚨  Questo non sembra essere un modello multiclass!")
     
     model = NetworkTrafficMLPMulticlass(
         checkpoint['input_dim'], 
