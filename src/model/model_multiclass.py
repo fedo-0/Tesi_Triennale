@@ -94,7 +94,7 @@ class NetworkTrafficDatasetMulticlass:
     """Classe per gestire il caricamento dati MULTICLASS"""
     
     def __init__(self, config_path="config/dataset.json", hyperparams_path="config/hyperparameters.json", 
-                 model_size="small", metadata_path="resources/datasets/multiclass_metadata.json"):
+                 model_size="small", metadata_path="resources/datasets/mlp_multiclass_metadata.json"):
         self.metadata_path = metadata_path
         self.load_configs(config_path, hyperparams_path, model_size)
         
@@ -138,7 +138,7 @@ class NetworkTrafficDatasetMulticlass:
         logger.info(f"  Hyperparams: {self.hyperparams}")
     
     def analyze_data_distribution_multiclass(self, df, set_name):
-        """Analizza la distribuzione multiclass - VERSIONE CORRETTA"""
+        """Analizza la distribuzione multiclass"""
         target_values = df[self.target_column].value_counts().sort_index()
         total = len(df)
         
@@ -177,7 +177,7 @@ class NetworkTrafficDatasetMulticlass:
         return target_values
     
     def load_data(self, train_path, val_path, test_path):
-        """Carica i dataset preprocessati multiclass - VERSIONE CORRETTA"""
+        """Carica i dataset preprocessati multiclass"""
         logger.info("Caricamento dataset multiclass...")
         
         # Carica i CSV
@@ -268,7 +268,7 @@ class NetworkTrafficDatasetMulticlass:
         return self.X_train.shape[1]
     
     def create_dataloaders(self):
-        """Crea i DataLoader per PyTorch - VERSIONE SEMPLIFICATA"""
+        """Crea i DataLoader per PyTorch"""
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         

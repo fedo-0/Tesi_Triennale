@@ -815,7 +815,7 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
 def main_pipeline_multiclass(model_size="small"):
-    """Versione migliorata della tua funzione main con CrossEntropyLoss"""
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
     if torch.cuda.is_available():
@@ -825,7 +825,7 @@ def main_pipeline_multiclass(model_size="small"):
         # Dataset manager
         dataset_manager = NetworkTrafficDatasetMulticlass(
             model_size=model_size,
-            metadata_path="resources/datasets/multiclass_metadata.json"
+            metadata_path="resources/datasets/mlp_multiclass_metadata.json"
         )
         
         # Carica dati

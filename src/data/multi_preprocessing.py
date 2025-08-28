@@ -2,9 +2,8 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import pickle
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from data.windowing import sliding_window_split_multiclass
-from data.undersampling import uniform_undersampling_to_minority
 
 def load_dataset_config(config_path="config/dataset.json"):
     """Carica la configurazione del dataset"""
@@ -54,73 +53,6 @@ def standard_scaling_transform(df, scaler, numeric_cols_present):
     
     return df_scaled
 
-def analyze_multiclass_distribution(df, label_col='Label', attack_col='Attack'):
-    """Analizza la distribuzione delle classi multiclass"""
-    print(f"\n--- ANALISI DISTRIBUZIONE MULTICLASS ---")
-    
-    attack_counts = df[attack_col].value_counts()
-    total_samples = len(df)
-    
-    print(f"Totale campioni: {total_samples:,}")
-    print(f"Classi uniche trovate: {len(attack_counts)}")
-    
-    print(f"\nDistribuzione classi:")
-    for class_name, count in attack_counts.items():
-        percentage = (count / total_samples) * 100
-        class_type = "Benigno" if class_name.lower() in ['benign', 'normal'] else "Attacco"
-        print(f"  {class_name}: {count:,} ({percentage:.2f}%) - {class_type}")
-    
-    return attack_counts
-
-def filter_rare_classes(df, attack_col='Attack', min_samples=5000):
-    """
-    Rimuove classi con troppo pochi campioni
-    """
-    print(f"\n--- FILTRAGGIO CLASSI RARE (min_samples={min_samples:,}) ---")
-    
-    initial_samples = len(df)
-    initial_classes = df[attack_col].nunique()
-    
-    # Analizza distribuzione
-    class_counts = df[attack_col].value_counts()
-    
-    # Identifica classi rare
-    rare_classes = class_counts[class_counts < min_samples].index.tolist()
-    keep_classes = class_counts[class_counts >= min_samples].index.tolist()
-    
-    print(f"Classi originali: {initial_classes}")
-    print(f"Campioni originali: {initial_samples:,}")
-    
-    if rare_classes:
-        print(f"\nClassi rimosse (< {min_samples:,} campioni):")
-        removed_samples = 0
-        for class_name in rare_classes:
-            count = class_counts[class_name]
-            removed_samples += count
-            print(f"  ❌ {class_name}: {count:,} campioni")
-        
-        print(f"\nClassi mantenute (≥ {min_samples:,} campioni):")
-        for class_name in keep_classes:
-            count = class_counts[class_name]
-            print(f"  ✅ {class_name}: {count:,} campioni")
-        
-        # Filtra il dataset
-        df_filtered = df[df[attack_col].isin(keep_classes)].copy()
-        df_filtered.reset_index(drop=True, inplace=True)
-        
-        final_samples = len(df_filtered)
-        final_classes = df_filtered[attack_col].nunique()
-        
-        print(f"\n📊 Risultato filtraggio:")
-        print(f"  Classi: {initial_classes} → {final_classes} (-{initial_classes - final_classes})")
-        print(f"  Campioni: {initial_samples:,} → {final_samples:,} (-{removed_samples:,})")
-        print(f"  Riduzione: {(removed_samples/initial_samples)*100:.2f}%")
-        
-        return df_filtered, rare_classes
-    else:
-        print(f"✅ Nessuna classe da rimuovere (tutte hanno ≥ {min_samples:,} campioni)")
-        return df.copy(), []
-
 def create_multiclass_encoding(df_train, attack_col='Attack', label_col='Label'):
     """Crea l'encoding per le classi multiclass basandosi solo sul training set"""
     print(f"\n--- CREAZIONE ENCODING MULTICLASS ---")
@@ -168,54 +100,37 @@ def apply_multiclass_encoding(df, label_encoder, attack_col='Attack'):
     
     return df_encoded
 
-def extract_datasets_from_indices(df, train_windows, val_windows, test_windows):
-    """
-    Estrae i dataset usando gli indici - MEMORY EFFICIENT
-    """
-    print(f"\n--- ESTRAZIONE DATASET DA INDICI ---")
+def analyze_processed_distribution(df, label_encoder, set_name="Dataset"):
+    """Analizza la distribuzione delle classi nel dataset processato"""
+    print(f"\n--- ANALISI DISTRIBUZIONE {set_name.upper()} ---")
     
-    # Estrai tutti gli indici
-    train_indices = []
-    val_indices = []
-    test_indices = []
+    total_samples = len(df)
+    value_counts = df['multiclass_target'].value_counts().sort_index()
     
-    for w in train_windows:
-        train_indices.extend(range(w['start_pos'], w['end_pos']))
-    for w in val_windows:
-        val_indices.extend(range(w['start_pos'], w['end_pos']))
-    for w in test_windows:
-        test_indices.extend(range(w['start_pos'], w['end_pos']))
+    print(f"Totale campioni: {total_samples:,}")
+    print(f"Classi trovate: {len(value_counts)}")
     
-    # Subset del DataFrame originale (molto efficiente)
-    train_data = df.iloc[train_indices].copy()
-    val_data = df.iloc[val_indices].copy()
-    test_data = df.iloc[test_indices].copy()
+    print(f"\nDistribuzione classi processate:")
+    for class_idx, count in value_counts.items():
+        class_name = label_encoder.classes_[class_idx]
+        percentage = (count / total_samples) * 100
+        class_type = "Benigno" if class_name.lower() in ['benign', 'normal'] else "Attacco"
+        print(f"  {class_name} ({class_idx}): {count:,} ({percentage:.2f}%) - {class_type}")
     
-    # Reset degli indici
-    train_data.reset_index(drop=True, inplace=True)
-    val_data.reset_index(drop=True, inplace=True)
-    test_data.reset_index(drop=True, inplace=True)
-    
-    print(f"Dataset estratti:")
-    print(f"  Train: {len(train_data):,} pacchetti")
-    print(f"  Validation: {len(val_data):,} pacchetti")
-    print(f"  Test: {len(test_data):,} pacchetti")
-    
-    return train_data, val_data, test_data
+    return value_counts
 
-def preprocess_dataset_multiclass(dataset_path, config_path, output_dir, 
-                                 train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
-                                 window_size=10,
-                                 label_col='Label', attack_col='Attack',
-                                 min_samples_per_class=10000,
-                                 benign_undersample_ratio=0.5):
+def preprocess_dataset_multiclass(clean_split_dir, config_path, output_dir,
+                                          label_col='Label', attack_col='Attack'):
     """
-    Funzione principale per preprocessing multiclasse con micro-finestre - MEMORY OPTIMIZED
+    Preprocessing MLP per dataset multiclasse partendo da split già puliti
+    Input: train.csv, val.csv, test.csv già puliti da split.py
+    Output: dataset processati pronti per MLP con encoding e scaling
     """
     
-    print("PREPROCESSING MULTICLASSE CON MICRO-FINESTRE TEMPORALI")
-    print("=" * 70)
-    print("Versione: Memory-optimized per dataset di milioni di righe")
+    print("PREPROCESSING MULTICLASSE PER MLP")
+    print("=" * 50)
+    print("Input: Dataset già puliti e divisi da split.py")
+    print("Output: Dataset processati per architettura MLP")
     
     # Carica configurazione
     config = load_dataset_config(config_path)
@@ -225,87 +140,57 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     print(f"\nConfigurazione caricata:")
     print(f"- Colonne numeriche: {len(numeric_columns)}")
     print(f"- Colonne categoriche: {len(categorical_columns)}")
-    print(f"- Split ratio: {train_ratio*100:.0f}-{val_ratio*100:.0f}-{test_ratio*100:.0f}")
+    
+    # === FASE 1: CARICAMENTO DATASET PULITI ===
+    print(f"\n=== FASE 1: CARICAMENTO DATASET PULITI ===")
+    
+    train_path = os.path.join(clean_split_dir, "train.csv")
+    val_path = os.path.join(clean_split_dir, "val.csv")
+    test_path = os.path.join(clean_split_dir, "test.csv")
+    
+    # Verifica esistenza file
+    for path, name in [(train_path, "train"), (val_path, "val"), (test_path, "test")]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File {name} non trovato: {path}")
     
     # Carica dataset
-    print(f"\nCaricamento dataset da: {dataset_path}")
-    df = pd.read_csv(dataset_path)
-    print(f"Dataset originale: {df.shape[0]:,} righe, {df.shape[1]} colonne")
-
-    # Gestione valori infiniti e NaN
-    initial_rows = len(df)
-    numeric_cols_present = [col for col in numeric_columns if col in df.columns]
-
-    if numeric_cols_present:
-        inf_count = 0
-        for col in numeric_cols_present:
-            col_inf_count = np.isinf(df[col]).sum()
-            inf_count += col_inf_count
-        
-        if inf_count > 0:
-            print(f"Sostituiti {inf_count} valori infiniti con NaN")
-            df[numeric_cols_present] = df[numeric_cols_present].replace([np.inf, -np.inf], np.nan)
-
-    df = df.dropna().reset_index(drop=True)
-    removed_rows = initial_rows - len(df)
-    if removed_rows > 0:
-        print(f"Rimosse {removed_rows:,} righe contenenti valori NaN o infiniti")
-    print(f"Dataset dopo pulizia: {df.shape[0]:,} righe, {df.shape[1]} colonne")
-
-    if len(df) == 0:
-        raise ValueError("Il dataset risulta vuoto dopo la rimozione dei valori NaN!")
+    print("Caricamento dataset...")
+    train_data = pd.read_csv(train_path)
+    val_data = pd.read_csv(val_path)
+    test_data = pd.read_csv(test_path)
+    
+    print(f"- Training: {train_data.shape[0]:,} campioni, {train_data.shape[1]} colonne")
+    print(f"- Validation: {val_data.shape[0]:,} campioni, {val_data.shape[1]} colonne")
+    print(f"- Test: {test_data.shape[0]:,} campioni, {test_data.shape[1]} colonne")
     
     # Verifica colonne target
-    if label_col not in df.columns:
-        raise ValueError(f"Colonna label '{label_col}' non trovata nel dataset!")
-    if attack_col not in df.columns:
-        raise ValueError(f"Colonna attack '{attack_col}' non trovata nel dataset!")
+    for df_name, df in [("train", train_data), ("val", val_data), ("test", test_data)]:
+        if label_col not in df.columns:
+            raise ValueError(f"Colonna label '{label_col}' non trovata nel dataset {df_name}!")
+        if attack_col not in df.columns:
+            raise ValueError(f"Colonna attack '{attack_col}' non trovata nel dataset {df_name}!")
     
-    # Usa solo le features dal config
+    # Identifica features disponibili
     expected_features = numeric_columns + categorical_columns
-    feature_columns = [col for col in expected_features if col in df.columns]
+    feature_columns = [col for col in expected_features if col in train_data.columns]
     
     print(f"\nFeatures utilizzate: {len(feature_columns)} di {len(expected_features)} configurate")
-
-    # Rimuovo tutte le classi con meno dei sample minimi stabiliti
-    df_filtered, removed_classes = filter_rare_classes(df, attack_col, min_samples=min_samples_per_class)
-
-    if removed_classes:
-        print(f"\n⚠️  Dataset filtrato: rimosse {len(removed_classes)} classi rare")
-        # Aggiorna il DataFrame di lavoro
-        df = df_filtered
-        
-    df_undersampled, total_removed_samples = uniform_undersampling_to_minority(df, attack_col)
-
-    if total_removed_samples > 0:
-        print(f"\n⚠️  Dataset ha subito undersampling uniforme: rimosse {total_removed_samples:,} campioni")
-        
-        # Aggiorna il DataFrame di lavoro
-        df = df_undersampled
-
-    analyze_multiclass_distribution(df, label_col, attack_col)
-
-    # Split con micro-finestre
-    train_data, val_data, test_data = sliding_window_split_multiclass(
-        df, window_size, train_ratio, val_ratio, test_ratio
-    )
     
-    # Libera memoria del dataset originale
-    del df
+    # === FASE 2: CREAZIONE ENCODING MULTICLASS ===
+    print(f"\n=== FASE 2: CREAZIONE ENCODING MULTICLASS ===")
     
-    # Crea encoding multiclass basato solo su training set
+    # Crea encoding basato solo su training set
     label_encoder, class_mapping = create_multiclass_encoding(train_data, attack_col, label_col)
     
-    # Applica encoding multiclass a tutti i set
-    print(f"\n--- APPLICAZIONE ENCODING MULTICLASS ---")
+    # Applica encoding a tutti i set
+    print(f"\nApplicazione encoding...")
     train_data_encoded = apply_multiclass_encoding(train_data, label_encoder, attack_col)
     val_data_encoded = apply_multiclass_encoding(val_data, label_encoder, attack_col)
     test_data_encoded = apply_multiclass_encoding(test_data, label_encoder, attack_col)
     
-    # Libera memoria dei dataset non encoded
-    del train_data, val_data, test_data
+    # === FASE 3: SEPARAZIONE FEATURES E TARGET ===
+    print(f"\n=== FASE 3: SEPARAZIONE FEATURES E TARGET ===")
     
-    # Separa features e target
     X_train = train_data_encoded[feature_columns].copy()
     X_val = val_data_encoded[feature_columns].copy()
     X_test = test_data_encoded[feature_columns].copy()
@@ -314,126 +199,168 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     y_val = val_data_encoded['multiclass_target'].copy()
     y_test = test_data_encoded['multiclass_target'].copy()
     
-    # Libera memoria dei dataset encoded
-    del train_data_encoded, val_data_encoded, test_data_encoded
+    print(f"Features estratte: {X_train.shape[1]} colonne")
+    print(f"Target estratti: multiclass_target ({len(label_encoder.classes_)} classi)")
     
-    print(f"\nVerifica totale pacchetti: {len(X_train) + len(X_val) + len(X_test):,}")
+    # === FASE 4: PREPROCESSING FEATURES PER MLP ===
+    print(f"\n=== FASE 4: PREPROCESSING FEATURES PER MLP ===")
     
-    # Preprocessing features
-    print(f"\n--- PREPROCESSING FEATURES ---")
-    
-    # 1. Frequency encoding
+    # 1. Frequency encoding per variabili categoriche
     print("Applicazione frequency encoding...")
     freq_mappings = frequency_encoding_fit(X_train, categorical_columns)
+    
     X_train_encoded = frequency_encoding_transform(X_train, freq_mappings)
     X_val_encoded = frequency_encoding_transform(X_val, freq_mappings)
     X_test_encoded = frequency_encoding_transform(X_test, freq_mappings)
     
-    del X_train, X_val, X_test
+    print(f"- Colonne categoriche processate: {len([col for col in categorical_columns if col in freq_mappings])}")
     
-    # 2. Standard scaling
-    print("Applicazione Standard scaling...")
+    # 2. Standard scaling per tutte le features (numeriche + categoriche encoded)
+    print("Applicazione Standard Scaling...")
     scaler, numeric_cols_present = standard_scaling_fit(X_train_encoded, numeric_columns)
-    X_train_scaled = standard_scaling_transform(X_train_encoded, scaler, numeric_cols_present)
-    X_val_scaled = standard_scaling_transform(X_val_encoded, scaler, numeric_cols_present)
-    X_test_scaled = standard_scaling_transform(X_test_encoded, scaler, numeric_cols_present)
     
-    del X_train_encoded, X_val_encoded, X_test_encoded
+    # Scala anche le colonne categoriche encoded per MLP
+    categorical_cols_present = [col for col in categorical_columns if col in X_train_encoded.columns]
+    all_cols_to_scale = numeric_cols_present + categorical_cols_present
     
-    # Ricombina features e target
-    df_train = X_train_scaled.copy()
-    df_train['multiclass_target'] = y_train.reset_index(drop=True)
+    if all_cols_to_scale:
+        # Re-fit scaler su tutte le colonne (numeriche + categoriche encoded)
+        scaler_full = StandardScaler()
+        scaler_full.fit(X_train_encoded[all_cols_to_scale])
+        
+        X_train_scaled = X_train_encoded.copy()
+        X_val_scaled = X_val_encoded.copy()
+        X_test_scaled = X_test_encoded.copy()
+        
+        X_train_scaled[all_cols_to_scale] = scaler_full.transform(X_train_encoded[all_cols_to_scale])
+        X_val_scaled[all_cols_to_scale] = scaler_full.transform(X_val_encoded[all_cols_to_scale])
+        X_test_scaled[all_cols_to_scale] = scaler_full.transform(X_test_encoded[all_cols_to_scale])
+        
+        print(f"- Colonne scalate: {len(all_cols_to_scale)} (numeriche + categoriche)")
+    else:
+        X_train_scaled = X_train_encoded.copy()
+        X_val_scaled = X_val_encoded.copy()
+        X_test_scaled = X_test_encoded.copy()
+        scaler_full = None
+        print("- Nessuna colonna da scalare trovata")
     
-    df_val = X_val_scaled.copy()
-    df_val['multiclass_target'] = y_val.reset_index(drop=True)
+    # === FASE 5: RICOMBINAZIONE E SALVATAGGIO ===
+    print(f"\n=== FASE 5: RICOMBINAZIONE E SALVATAGGIO ===")
     
-    df_test = X_test_scaled.copy()
-    df_test['multiclass_target'] = y_test.reset_index(drop=True)
+    # Ricombina features processate e target
+    df_train_final = X_train_scaled.copy()
+    df_train_final['multiclass_target'] = y_train.values
     
-    del X_train_scaled, X_val_scaled, X_test_scaled, y_train, y_val, y_test
+    df_val_final = X_val_scaled.copy()
+    df_val_final['multiclass_target'] = y_val.values
     
-    # Crea directory output e salva
+    df_test_final = X_test_scaled.copy()
+    df_test_final['multiclass_target'] = y_test.values
+    
+    # Crea directory output
     os.makedirs(output_dir, exist_ok=True)
     
-    train_path = os.path.join(output_dir, "train_multiclass.csv")
-    val_path = os.path.join(output_dir, "val_multiclass.csv")
-    test_path = os.path.join(output_dir, "test_multiclass.csv")
+    # Salva dataset processati per MLP
+    train_mlp_path = os.path.join(output_dir, "train_multiclass.csv")
+    val_mlp_path = os.path.join(output_dir, "val_multiclass.csv")
+    test_mlp_path = os.path.join(output_dir, "test_multiclass.csv")
     
-    print(f"\n--- SALVATAGGIO DATASET ---")
-    df_train.to_csv(train_path, index=False)
-    df_val.to_csv(val_path, index=False)
-    df_test.to_csv(test_path, index=False)
+    df_train_final.to_csv(train_mlp_path, index=False)
+    df_val_final.to_csv(val_mlp_path, index=False)
+    df_test_final.to_csv(test_mlp_path, index=False)
     
-
-    # Salva metadati
-    metadata = {
+    print(f"Dataset MLP salvati:")
+    print(f"- Training: {train_mlp_path} ({df_train_final.shape[0]:,} righe)")
+    print(f"- Validation: {val_mlp_path} ({df_val_final.shape[0]:,} righe)")
+    print(f"- Test: {test_mlp_path} ({df_test_final.shape[0]:,} righe)")
+    
+    # === FASE 6: SALVATAGGIO METADATI E OGGETTI ===
+    print(f"\n=== FASE 6: SALVATAGGIO METADATI E OGGETTI ===")
+    
+    # Salva metadati MLP
+    mlp_metadata = {
+        'architecture': 'MLP',
         'label_encoder_classes': label_encoder.classes_.tolist(),
         'class_mapping': class_mapping,
         'n_classes': len(label_encoder.classes_),
         'feature_columns': feature_columns,
-        'label_col': label_col,
-        'attack_col': attack_col,
-        'train_ratio': train_ratio,
-        'val_ratio': val_ratio,
-        'test_ratio': test_ratio,
-        'window_size': window_size,
-        'removed_rare_classes': removed_classes,
-        'min_samples_threshold': min_samples_per_class,
-        'benign_undersample_ratio': benign_undersample_ratio,
-        'preprocessing_version': 'multiclass_v2.0_memory_optimized'
+        'preprocessing_applied': {
+            'frequency_encoding': True,
+            'standard_scaling': True,
+            'categorical_columns_scaled': True
+        },
+        'columns_info': {
+            'label_col': label_col,
+            'attack_col': attack_col,
+            'numeric_columns': numeric_cols_present,
+            'categorical_columns': categorical_cols_present,
+            'total_features': len(feature_columns)
+        },
+        'dataset_shapes': {
+            'train': df_train_final.shape,
+            'val': df_val_final.shape,
+            'test': df_test_final.shape
+        },
+        'input_source': clean_split_dir,
+        'preprocessing_version': 'mlp_multiclass_v1.0',
+        'timestamp': pd.Timestamp.now().isoformat()
     }
     
-    metadata_path = os.path.join(output_dir, "multiclass_metadata.json")
+    # Salva metadati
+    metadata_path = os.path.join(output_dir, "mlp_multiclass_metadata.json")
     with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(mlp_metadata, f, indent=2)
     
-    mappings_path = os.path.join(output_dir, "multiclass_mappings.json")
+    # Salva mappings
+    mappings_path = os.path.join(output_dir, "mlp_multiclass_mappings.json")
     mappings_data = {
         'freq_mappings': freq_mappings,
         'class_mapping': class_mapping,
         'numeric_columns': numeric_columns,
-        'categorical_columns': categorical_columns
+        'categorical_columns': categorical_columns,
+        'scaled_columns': all_cols_to_scale
     }
     with open(mappings_path, 'w') as f:
         json.dump(mappings_data, f, indent=2)
     
-    # Salva scaler
-    import pickle
-    scaler_path = os.path.join(output_dir, "multiclass_scaler.pkl")
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
+    # Salva oggetti di preprocessing
+    if scaler_full is not None:
+        scaler_path = os.path.join(output_dir, "mlp_multiclass_scaler.pkl")
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(scaler_full, f)
+        print(f"- Scaler salvato: {scaler_path}")
     
-    print(f"Dataset salvati:")
-    print(f"- Training: {train_path} ({df_train.shape[0]:,} righe)")
-    print(f"- Validation: {val_path} ({df_val.shape[0]:,} righe)")
-    print(f"- Test: {test_path} ({df_test.shape[0]:,} righe)")
+    encoder_path = os.path.join(output_dir, "mlp_multiclass_label_encoder.pkl")
+    with open(encoder_path, 'wb') as f:
+        pickle.dump(label_encoder, f)
     
-    # Statistiche finali essenziali
-    print(f"\n--- STATISTICHE FINALI ---")
+    print(f"- Metadati: {metadata_path}")
+    print(f"- Mappings: {mappings_path}")
+    print(f"- Label encoder: {encoder_path}")
     
-    for set_name, dataset in [("Training", df_train), ("Validation", df_val), ("Test", df_test)]:
-        total = len(dataset)
-        value_counts = dataset['multiclass_target'].value_counts().sort_index()
-        print(f"\n{set_name} Set: {total:,} pacchetti")
-        
-        for class_idx, count in value_counts.items():
-            class_name = label_encoder.classes_[class_idx]
-            percentage = (count / total) * 100
-            print(f"  {class_name} ({class_idx}): {count:,} ({percentage:.2f}%)")
+    # === STATISTICHE FINALI ===
+    print(f"\n=== STATISTICHE FINALI MLP ===")
     
-    return df_train, df_val, df_test, scaler, freq_mappings, label_encoder, class_mapping
+    # Analizza distribuzione per ogni set
+    for set_name, dataset in [("Training", df_train_final), ("Validation", df_val_final), ("Test", df_test_final)]:
+        analyze_processed_distribution(dataset, label_encoder, set_name)
+    
+    print(f"\n🎯 RIEPILOGO PREPROCESSING MLP:")
+    print(f"✅ Dataset caricati da: {clean_split_dir}")
+    print(f"✅ Encoding multiclasse: {len(label_encoder.classes_)} classi")
+    print(f"✅ Frequency encoding: {len([col for col in categorical_columns if col in freq_mappings])} colonne categoriche")
+    print(f"✅ Standard scaling: {len(all_cols_to_scale)} colonne totali")
+    print(f"✅ Dataset MLP salvati in: {output_dir}")
+    print(f"✅ Pronti per training architettura MLP")
+    
+    return df_train_final, df_val_final, df_test_final, scaler_full, freq_mappings, label_encoder, class_mapping
 
 
 if __name__ == "__main__":
     df_train, df_val, df_test, scaler, freq_mappings, label_encoder, class_mapping = preprocess_dataset_multiclass(
-        dataset_path="resources/datasets/dataset_ton_v3.csv",
+        clean_split_dir="resources/datasets",
         config_path="config/dataset.json",
         output_dir="resources/datasets",
-        train_ratio=0.70,
-        val_ratio=0.15,
-        test_ratio=0.15,
-        window_size=10,
         label_col='Label',
-        attack_col='Attack',
-        min_samples_per_class=10000
+        attack_col='Attack'
     )

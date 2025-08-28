@@ -12,13 +12,31 @@ from data.preprocessing_transformer import preprocess_dataset_transformer
 from trainer.trainer_bin import main_pipeline_bin
 from trainer.trainer_multiclass import main_pipeline_multiclass
 from trainer.trainer_transformer import main_pipeline_transformer
+from data.split import clean_and_split_dataset
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
+def split (input_path: str, output_dir: str):
+    logger.info("Pulizia e Divisione del dataset in corso...")
+    
+    clean_and_split_dataset(
+        dataset_path=input_path,
+        config_path="config/dataset.json",
+        output_dir=output_dir,
+        train_ratio=0.70,
+        val_ratio=0.15,
+        test_ratio=0.15,
+        window_size=10,
+        label_col='Label',
+        attack_col='Attack',
+        min_samples_per_class=10000
+    )
+
+    logger.info("✅ Clean e Split del dataset completato con successo!")
+
 def prepare_data(input_path: str, output_dir: str):
     logger.info("Preparing data...")
-    df = pd.read_csv(input_path)
     
     """
     logger.info(f"Numero totale di righe: {len(df)}")
@@ -42,7 +60,7 @@ def prepare_data(input_path: str, output_dir: str):
     try:
         # esecuzione del preprocessing multiclasse
         df_train, df_val, df_test, scaler, freq_mappings, label_encoder, class_mapping = preprocess_dataset_multiclass(
-            dataset_path=input_path,
+            clean_split_dir=input_path,
             config_path="config/dataset.json",
             output_dir=output_dir
         )
@@ -91,10 +109,18 @@ if __name__ == "__main__":
         subcommand="prepare",
         arguments=["--input", "--output"],
         helps=[
+            "The clean split directory.",
+            "The output directory for the prepared data.",
+        ],
+        defaults=["resources/datasets", "resources/datasets"],
+    ).register_subcommand(
+        subcommand="split",
+        arguments=["--input", "--output"],
+        helps=[
             "The input path for the data.",
             "The output directory for the prepared data.",
         ],
-        defaults=["resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets"],
+        defaults=["resources/datasets/dataset_ton_v3.csv", "resources/datasets"],
     ).register_subcommand(
         subcommand="runbinary",
         arguments=["--model-size"],
@@ -122,6 +148,8 @@ if __name__ == "__main__":
 
     if args.subcommand == "prepare":
         prepare_data(args.input, args.output)
+    elif args.subcommand == "split":
+        split(args.input, args.output)
     elif args.subcommand == "runbinary":
         run_binclassifier(args.model_size)
     elif args.subcommand == "runmulti":
