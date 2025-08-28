@@ -67,7 +67,6 @@ class ModelTrainerMulticlass:
         return x
     
     # TRAIN
-
     def train_epoch(self, train_loader, epoch):
         """Training epoch con logging ottimizzato"""
         self.model.train()
@@ -243,9 +242,8 @@ class ModelTrainerMulticlass:
                 logger.info(f"  {self.class_names[class_idx]}: Actual={actual_count}, Predicted={predicted_count}")
         
         return avg_loss, accuracy, predictions, targets, probabilities
-    
     #########MODIFICATA LA PATIENCE PER I GRAFICI
-    def train(self, train_loader, val_loader, epochs=100, patience=2):
+    def train(self, train_loader, val_loader, epochs=100, patience=15):
         """Addestra il modello - IDENTICO AL BINARIO"""
         logger.info(f"Inizio addestramento MULTICLASS per {epochs} epochs...")
         logger.info(f"Device: {self.device}")
@@ -322,7 +320,6 @@ class ModelTrainerMulticlass:
 
         return self.model
     
-
     # PLOT
     def plot_training_history(self, save_path=None, val_predictions=None, val_targets=None):
         """
@@ -470,7 +467,7 @@ class ModelTrainerMulticlass:
         # F1 Score per classe con colori diversi + aggregated
         # Crea palette di colori diversi per ogni classe
         colors = cm.Set3(np.linspace(0, 1, len(self.class_names)))
-        
+
         # Aggiunge F1 weighted per "aggregated"
         x_pos_agg = np.arange(len(self.class_names) + 1)
         f1_with_agg = np.append(f1_per_class, f1_weighted)
@@ -480,67 +477,46 @@ class ModelTrainerMulticlass:
         colors_agg = np.vstack([colors, [0.5, 0.5, 0.5, 1.0]])
         
         bars1 = ax1.bar(x_pos_agg, f1_with_agg, color=colors_agg, alpha=1.0)
-        ax1.set_title('F1-Scores', fontsize=14, fontweight='bold')
+        ax1.set_title('F1-Score per Classe + Aggregated', fontsize=14, fontweight='bold')
         ax1.set_xlabel('Classi')
         ax1.set_ylabel('F1-Score')
         ax1.set_xticks(x_pos_agg)
         ax1.set_xticklabels(class_names_with_agg, rotation=45, ha='right')
         ax1.grid(True, alpha=0.3)
-        ax1.set_ylim(0, 1.1)  # Aumentato per spazio sopra
-        
-        # Aggiungi valori sopra le barre - posizionati sopra la barra
-        for bar, value in zip(bars1, f1_with_agg):
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
-        
+        ax1.set_ylim(0, 1)
+         
         # Precision per classe (colori diversi)
         bars2 = ax2.bar(x_pos, precision_per_class, color=colors, alpha=1.0)
-        ax2.set_title('Precision', fontsize=14, fontweight='bold')
+        ax2.set_title('Precision per Classe', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Classi')
         ax2.set_ylabel('Precision')
         ax2.set_xticks(x_pos)
         ax2.set_xticklabels(self.class_names, rotation=45, ha='right')
         ax2.grid(True, alpha=0.3)
-        ax2.set_ylim(0, 1.1)  # Aumentato per spazio sopra
-        
-        for bar, value in zip(bars2, precision_per_class):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax2.set_ylim(0, 1)
         
         # Recall per classe (colori diversi)
         bars3 = ax3.bar(x_pos, recall_per_class, color=colors, alpha=1.0)
-        ax3.set_title('Recall', fontsize=14, fontweight='bold')
+        ax3.set_title('Recall per Classe', fontsize=14, fontweight='bold')
         ax3.set_xlabel('Classi')
         ax3.set_ylabel('Recall')
         ax3.set_xticks(x_pos)
         ax3.set_xticklabels(self.class_names, rotation=45, ha='right')
         ax3.grid(True, alpha=0.3)
-        ax3.set_ylim(0, 1.1)  # Aumentato per spazio sopra
-        
-        for bar, value in zip(bars3, recall_per_class):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax3.set_ylim(0, 1)
         
         # Support (numero campioni) per classe (colori diversi)
         bars4 = ax4.bar(x_pos, support_per_class, color=colors, alpha=1.0)
-        ax4.set_title('Support', fontsize=14, fontweight='bold')
+        ax4.set_title('Support per Classe (Numero Campioni)', fontsize=14, fontweight='bold')
         ax4.set_xlabel('Classi')
         ax4.set_ylabel('Numero Campioni')
         ax4.set_xticks(x_pos)
         ax4.set_xticklabels(self.class_names, rotation=45, ha='right')
         ax4.grid(True, alpha=0.3)
         
-        # Per support, calcola lo spazio dinamicamente perché i valori possono essere molto diversi
+        # Per support, usa il valore massimo come riferimento per posizionare i testi
         max_support = max(support_per_class)
-        ax4.set_ylim(0, max_support * 1.15)  # 15% di spazio sopra il valore massimo
-        
-        for bar, value in zip(bars4, support_per_class):
-            height = bar.get_height()
-            ax4.text(bar.get_x() + bar.get_width()/2., height + max_support * 0.02,
-                    f'{int(value)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax4.set_ylim(0, max_support)
         
         plt.tight_layout()
         
@@ -652,17 +628,12 @@ class ModelTrainerMulticlass:
         colors_agg = np.vstack([colors, [0.5, 0.5, 0.5, 1.0]])
         
         bars = plt.bar(x_pos_agg, f1_with_agg, color=colors_agg, alpha=1.0)
-        plt.title('F1-Scores', fontsize=14, fontweight='bold')
+        plt.title('F1-Score per Classe + Aggregated', fontsize=14, fontweight='bold')
         plt.xlabel('Classi')
         plt.ylabel('F1-Score')
         plt.xticks(x_pos_agg, class_names_with_agg, rotation=45, ha='right')
         plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
-        
-        for bar, value in zip(bars, f1_with_agg):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        plt.ylim(0, 1)
         
         plt.tight_layout()
         f1_path = base_save_path.replace('.png', '_f1_scores.png')
@@ -673,17 +644,12 @@ class ModelTrainerMulticlass:
         # 2. Precision per classe
         plt.figure(figsize=(12, 8))
         bars = plt.bar(x_pos, precision_per_class, color=colors, alpha=1.0)
-        plt.title('Precision', fontsize=14, fontweight='bold')
+        plt.title('Precision per Classe', fontsize=14, fontweight='bold')
         plt.xlabel('Classi')
         plt.ylabel('Precision')
         plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
         plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
-        
-        for bar, value in zip(bars, precision_per_class):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        plt.ylim(0, 1)
         
         plt.tight_layout()
         precision_path = base_save_path.replace('.png', '_precision.png')
@@ -694,17 +660,12 @@ class ModelTrainerMulticlass:
         # 3. Recall per classe
         plt.figure(figsize=(12, 8))
         bars = plt.bar(x_pos, recall_per_class, color=colors, alpha=1.0)
-        plt.title('Recall', fontsize=14, fontweight='bold')
+        plt.title('Recall per Classe', fontsize=14, fontweight='bold')
         plt.xlabel('Classi')
         plt.ylabel('Recall')
         plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
         plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
-        
-        for bar, value in zip(bars, recall_per_class):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        plt.ylim(0, 1)
         
         plt.tight_layout()
         recall_path = base_save_path.replace('.png', '_recall.png')
@@ -715,20 +676,15 @@ class ModelTrainerMulticlass:
         # 4. Support per classe
         plt.figure(figsize=(12, 8))
         bars = plt.bar(x_pos, support_per_class, color=colors, alpha=1.0)
-        plt.title('Support', fontsize=14, fontweight='bold')
+        plt.title('Support per Classe (Numero Campioni)', fontsize=14, fontweight='bold')
         plt.xlabel('Classi')
         plt.ylabel('Numero Campioni')
         plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
         plt.grid(True, alpha=0.3)
         
-        # Per support, calcola lo spazio dinamicamente
+        # Per support, usa il valore massimo come riferimento
         max_support = max(support_per_class)
-        plt.ylim(0, max_support * 1.15)  # 15% di spazio sopra
-        
-        for bar, value in zip(bars, support_per_class):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + max_support * 0.02,
-                    f'{int(value)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        plt.ylim(0, max_support)
         
         plt.tight_layout()
         support_path = base_save_path.replace('.png', '_support.png')
@@ -909,7 +865,7 @@ def main_pipeline_multiclass(model_size="small"):
 
 
         # Training
-        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=2)
+        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
         
         # Plot training history
         import os
