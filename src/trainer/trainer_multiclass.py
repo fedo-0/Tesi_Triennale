@@ -242,7 +242,7 @@ class ModelTrainerMulticlass:
                 logger.info(f"  {self.class_names[class_idx]}: Actual={actual_count}, Predicted={predicted_count}")
         
         return avg_loss, accuracy, predictions, targets, probabilities
-    #########MODIFICATA LA PATIENCE PER I GRAFICI
+    
     def train(self, train_loader, val_loader, epochs=100, patience=15):
         """Addestra il modello - IDENTICO AL BINARIO"""
         logger.info(f"Inizio addestramento MULTICLASS per {epochs} epochs...")
@@ -324,7 +324,6 @@ class ModelTrainerMulticlass:
     def plot_training_history(self, save_path=None, val_predictions=None, val_targets=None):
         """
         Plotta l'andamento dell'addestramento con metriche finali e per-classe
-        MODIFICATO secondo le richieste del professore
         
         Args:
             save_path: Path per salvare il plot principale
@@ -861,9 +860,7 @@ def main_pipeline_multiclass(model_size="small"):
         
 
 
-        #####MODIFICATA LA PATIENCE QUI SOTTO
-
-
+        ##### MODIFICATA LA PATIENCE QUI SOTTO
         # Training
         trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
         
