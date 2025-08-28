@@ -25,6 +25,17 @@ class ModelTrainerMulticlass:
         self.device = device
         self.n_classes = n_classes
         self.class_names = class_names
+
+        # Tracking delle metriche
+        self.train_losses = []
+        self.val_losses = []
+        self.val_precisions = []
+        self.val_recalls = []
+        self.val_accuracies = []
+        #self.learning_rates = []
+        
+        self.last_val_predictions = None
+        self.last_val_targets = None
         
         # Optimizer
         self.optimizer = optim.Adam(
@@ -55,6 +66,8 @@ class ModelTrainerMulticlass:
             return x + noise
         return x
     
+    # TRAIN
+
     def train_epoch(self, train_loader, epoch):
         """Training epoch con logging ottimizzato"""
         self.model.train()
@@ -231,7 +244,8 @@ class ModelTrainerMulticlass:
         
         return avg_loss, accuracy, predictions, targets, probabilities
     
-    def train(self, train_loader, val_loader, epochs=100, patience=15):
+    #########MODIFICATA LA PATIENCE PER I GRAFICI
+    def train(self, train_loader, val_loader, epochs=100, patience=2):
         """Addestra il modello - IDENTICO AL BINARIO"""
         logger.info(f"Inizio addestramento MULTICLASS per {epochs} epochs...")
         logger.info(f"Device: {self.device}")
@@ -257,6 +271,10 @@ class ModelTrainerMulticlass:
             # Validation
             val_loss, val_acc, val_pred, val_true, val_prob = self.validate(val_loader)
             
+            # Salva l'ultima validazione
+            self.last_val_predictions = val_pred
+            self.last_val_targets = val_true
+
             # Scheduler step
             self.scheduler.step(val_loss)
             
@@ -269,6 +287,9 @@ class ModelTrainerMulticlass:
             precision, recall, f1, _ = precision_recall_fscore_support(
                 val_true, val_pred, average='weighted', zero_division=0
             )
+
+            self.val_precisions.append(precision)
+            self.val_recalls.append(recall)
             
             logger.info(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
             logger.info(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
@@ -280,7 +301,7 @@ class ModelTrainerMulticlass:
                 best_val_loss = val_loss
                 patience_counter = 0
                 best_model_state = self.model.state_dict().copy()
-                logger.info("âœ“ Nuovo miglior modello salvato!")
+                logger.info("✅ Nuovo miglior modello salvato!")
             else:
                 patience_counter += 1
                 logger.info(f"Patience: {patience_counter}/{patience}")
@@ -292,57 +313,430 @@ class ModelTrainerMulticlass:
         if best_model_state is not None:
             self.model.load_state_dict(best_model_state)
             logger.info("Caricato il miglior modello per la valutazione finale.")
-        
+
+            # Rifai validazione con il miglior modello per avere predizioni corrette
+            logger.info("Ricalcolo validazione finale con il miglior modello...")
+            val_loss_final, val_acc_final, val_pred_final, val_true_final, val_prob_final = self.validate(val_loader)
+            self.last_val_predictions = val_pred_final
+            self.last_val_targets = val_true_final
+
         return self.model
     
-    def plot_training_history(self, save_path=None):
-        """Plotta l'andamento dell'addestramento - IDENTICO AL BINARIO"""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+
+    # PLOT
+    def plot_training_history(self, save_path=None, val_predictions=None, val_targets=None):
+        """
+        Plotta l'andamento dell'addestramento con metriche finali e per-classe
+        MODIFICATO secondo le richieste del professore
+        
+        Args:
+            save_path: Path per salvare il plot principale
+            val_predictions: Predizioni dell'ultimo epoch di validazione per calcolare metriche
+            val_targets: Target reali dell'ultimo epoch di validazione
+        """
+        from sklearn.metrics import precision_recall_fscore_support, accuracy_score
+        
+        # Plot principale con Loss, Accuracy, Precision e Recall
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
         
         epochs = range(1, len(self.train_losses) + 1)
         
         # Loss
-        ax1.plot(epochs, self.train_losses, label='Training Loss', color='blue')
-        ax1.plot(epochs, self.val_losses, label='Validation Loss', color='red')
-        ax1.set_title('Model Loss')
+        ax1.plot(epochs, self.train_losses, label='Training Loss', color='blue', linewidth=2)
+        ax1.plot(epochs, self.val_losses, label='Validation Loss', color='red', linewidth=2)
+        ax1.set_title('Model Loss', fontsize=14, fontweight='bold')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Loss')
         ax1.legend()
-        ax1.grid(True)
+        ax1.grid(True, alpha=0.3)
         
         # Accuracy
-        ax2.plot(epochs, self.val_accuracies, label='Validation Accuracy', color='green')
-        ax2.set_title('Model Accuracy')
+        ax2.plot(epochs, self.val_accuracies, label='Validation Accuracy', color='green', linewidth=2)
+        ax2.set_title('Model Accuracy', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Epoch')
         ax2.set_ylabel('Accuracy (%)')
         ax2.legend()
-        ax2.grid(True)
+        ax2.grid(True, alpha=0.3)
         
-        # Learning Rate
-        ax3.plot(epochs, self.learning_rates, label='Learning Rate', color='orange')
-        ax3.set_title('Learning Rate Schedule')
-        ax3.set_xlabel('Epoch')
-        ax3.set_ylabel('Learning Rate')
-        ax3.set_yscale('log')
-        ax3.legend()
-        ax3.grid(True)
+        # Calcola precision e recall per ogni epoca se disponibili
+        # Ora usiamo le liste salvate nel trainer invece di valori fissi
+        precision_history = self.val_precisions if hasattr(self, 'val_precisions') and self.val_precisions else []
+        recall_history = self.val_recalls if hasattr(self, 'val_recalls') and self.val_recalls else []
         
-        # Loss diff (overfitting check)
-        loss_diff = [val - train for val, train in zip(self.val_losses, self.train_losses)]
-        ax4.plot(epochs, loss_diff, label='Val Loss - Train Loss', color='purple')
-        ax4.axhline(y=0, color='black', linestyle='--', alpha=0.5)
-        ax4.set_title('Overfitting Check')
-        ax4.set_xlabel('Epoch')
-        ax4.set_ylabel('Loss Difference')
-        ax4.legend()
-        ax4.grid(True)
+        # Precision
+        if precision_history:
+            ax3.plot(epochs, precision_history, label='Validation Precision (Weighted)', 
+                    color='orange', linewidth=2)
+            ax3.set_title('Model Precision', fontsize=14, fontweight='bold')
+            ax3.set_xlabel('Epoch')
+            ax3.set_ylabel('Precision')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+        else:
+            ax3.text(0.5, 0.5, 'Precision data not available', 
+                    transform=ax3.transAxes, ha='center', va='center')
+            ax3.set_title('Model Precision', fontsize=14, fontweight='bold')
+        
+        # Recall
+        if recall_history:
+            ax4.plot(epochs, recall_history, label='Validation Recall (Weighted)', 
+                    color='purple', linewidth=2)
+            ax4.set_title('Model Recall', fontsize=14, fontweight='bold')
+            ax4.set_xlabel('Epoch')
+            ax4.set_ylabel('Recall')
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+        else:
+            ax4.text(0.5, 0.5, 'Recall data not available', 
+                    transform=ax4.transAxes, ha='center', va='center')
+            ax4.set_title('Model Recall', fontsize=14, fontweight='bold')
+        
+        # Calcola e mostra metriche finali se disponibili
+        if val_predictions is not None and val_targets is not None:
+            # Metriche globali
+            final_accuracy = accuracy_score(val_targets, val_predictions)
+            precision_w, recall_w, f1_w, _ = precision_recall_fscore_support(
+                val_targets, val_predictions, average='weighted', zero_division=0
+            )
+            precision_m, recall_m, f1_m, _ = precision_recall_fscore_support(
+                val_targets, val_predictions, average='macro', zero_division=0
+            )
+            
+            # Aggiungi testo con metriche finali
+            metrics_text = (
+                f"Final Validation Metrics:\n"
+                f"Accuracy: {final_accuracy:.4f}\n"
+                f"Weighted F1: {f1_w:.4f}\n"
+                f"Weighted Precision: {precision_w:.4f}\n"
+                f"Weighted Recall: {recall_w:.4f}\n"
+                f"Macro F1: {f1_m:.4f}\n"
+                f"Macro Precision: {precision_m:.4f}\n"
+                f"Macro Recall: {recall_m:.4f}"
+            )
+            
+            # Posiziona il testo nell'area del grafico
+            fig.text(0.02, 0.98, metrics_text, fontsize=10, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+            
+            logger.info("\n" + "="*50)
+            logger.info("METRICHE FINALI VALIDATION")
+            logger.info("="*50)
+            logger.info(f"Accuracy: {final_accuracy:.4f}")
+            logger.info(f"Weighted - Precision: {precision_w:.4f}, Recall: {recall_w:.4f}, F1: {f1_w:.4f}")
+            logger.info(f"Macro - Precision: {precision_m:.4f}, Recall: {recall_m:.4f}, F1: {f1_m:.4f}")
         
         plt.tight_layout()
+        plt.subplots_adjust(left=0.25)  # Lascia spazio per il testo delle metriche
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Training history plot salvato in: {save_path}")
+        
         plt.show()
+        
+        # Crea plot separato per metriche per classe se disponibili
+        if val_predictions is not None and val_targets is not None:
+            self._plot_per_class_metrics(val_predictions, val_targets, save_path)
+        else:
+            # Usa i valori salvati nel trainer se disponibili
+            if self.last_val_predictions is not None and self.last_val_targets is not None:
+                self._plot_per_class_metrics(self.last_val_predictions, self.last_val_targets, save_path)
+
+    def _plot_per_class_metrics(self, val_predictions, val_targets, base_save_path=None):
+        """
+        Crea un plot separato con metriche per ogni classe
+        MODIFICATO secondo le richieste del professore:
+        - F1 per classe con colori diversi + aggregated
+        - Rimozione dei plot di distribuzione
+        """
+        from sklearn.metrics import precision_recall_fscore_support
+        import matplotlib.cm as cm
+        
+        # Calcola metriche per classe
+        precision_per_class, recall_per_class, f1_per_class, support_per_class = precision_recall_fscore_support(
+            val_targets, val_predictions, average=None, zero_division=0
+        )
+        
+        # Calcola F1 weighted per "aggregated"
+        _, _, f1_weighted, _ = precision_recall_fscore_support(
+            val_targets, val_predictions, average='weighted', zero_division=0
+        )
+        
+        # Crea figure con layout 2x2
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        x_pos = np.arange(len(self.class_names))
+        
+        # F1 Score per classe con colori diversi + aggregated
+        # Crea palette di colori diversi per ogni classe
+        colors = cm.Set3(np.linspace(0, 1, len(self.class_names)))
+        
+        # Aggiunge F1 weighted per "aggregated"
+        x_pos_agg = np.arange(len(self.class_names) + 1)
+        f1_with_agg = np.append(f1_per_class, f1_weighted)
+        class_names_with_agg = list(self.class_names) + ['Aggregated']
+        
+        # Colori: classi normali + grigio per aggregated
+        colors_agg = np.vstack([colors, [0.5, 0.5, 0.5, 1.0]])
+        
+        bars1 = ax1.bar(x_pos_agg, f1_with_agg, color=colors_agg, alpha=1.0)
+        ax1.set_title('F1-Scores', fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Classi')
+        ax1.set_ylabel('F1-Score')
+        ax1.set_xticks(x_pos_agg)
+        ax1.set_xticklabels(class_names_with_agg, rotation=45, ha='right')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim(0, 1.1)  # Aumentato per spazio sopra
+        
+        # Aggiungi valori sopra le barre - posizionati sopra la barra
+        for bar, value in zip(bars1, f1_with_agg):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        # Precision per classe (colori diversi)
+        bars2 = ax2.bar(x_pos, precision_per_class, color=colors, alpha=1.0)
+        ax2.set_title('Precision', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Classi')
+        ax2.set_ylabel('Precision')
+        ax2.set_xticks(x_pos)
+        ax2.set_xticklabels(self.class_names, rotation=45, ha='right')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim(0, 1.1)  # Aumentato per spazio sopra
+        
+        for bar, value in zip(bars2, precision_per_class):
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        # Recall per classe (colori diversi)
+        bars3 = ax3.bar(x_pos, recall_per_class, color=colors, alpha=1.0)
+        ax3.set_title('Recall', fontsize=14, fontweight='bold')
+        ax3.set_xlabel('Classi')
+        ax3.set_ylabel('Recall')
+        ax3.set_xticks(x_pos)
+        ax3.set_xticklabels(self.class_names, rotation=45, ha='right')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_ylim(0, 1.1)  # Aumentato per spazio sopra
+        
+        for bar, value in zip(bars3, recall_per_class):
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        # Support (numero campioni) per classe (colori diversi)
+        bars4 = ax4.bar(x_pos, support_per_class, color=colors, alpha=1.0)
+        ax4.set_title('Support', fontsize=14, fontweight='bold')
+        ax4.set_xlabel('Classi')
+        ax4.set_ylabel('Numero Campioni')
+        ax4.set_xticks(x_pos)
+        ax4.set_xticklabels(self.class_names, rotation=45, ha='right')
+        ax4.grid(True, alpha=0.3)
+        
+        # Per support, calcola lo spazio dinamicamente perché i valori possono essere molto diversi
+        max_support = max(support_per_class)
+        ax4.set_ylim(0, max_support * 1.15)  # 15% di spazio sopra il valore massimo
+        
+        for bar, value in zip(bars4, support_per_class):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + max_support * 0.02,
+                    f'{int(value)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        
+        # Salva il plot per classe se specificato
+        if base_save_path:
+            per_class_save_path = base_save_path.replace('.png', '_per_class_metrics.png')
+            plt.savefig(per_class_save_path, dpi=300, bbox_inches='tight')
+            logger.info(f"Per-class metrics plot salvato in: {per_class_save_path}")
+        
+        plt.show()
+        
+        # Salva anche i singoli grafici separatamente
+        if base_save_path:
+            self._save_individual_plots(val_predictions, val_targets, base_save_path)
+        
+        # Log delle metriche per classe
+        logger.info("\n" + "="*60)
+        logger.info("METRICHE PER CLASSE (VALIDATION)")
+        logger.info("="*60)
+        
+        # Crea una tabella ordinata per F1 (peggiori prima)
+        class_metrics_data = []
+        for i, class_name in enumerate(self.class_names):
+            class_metrics_data.append({
+                'name': class_name,
+                'f1': f1_per_class[i],
+                'precision': precision_per_class[i],
+                'recall': recall_per_class[i],
+                'support': support_per_class[i]
+            })
+        
+        # Aggiungi metriche aggregate
+        class_metrics_data.append({
+            'name': 'AGGREGATED (Weighted)',
+            'f1': f1_weighted,
+            'precision': precision_recall_fscore_support(val_targets, val_predictions, average='weighted', zero_division=0)[0],
+            'recall': precision_recall_fscore_support(val_targets, val_predictions, average='weighted', zero_division=0)[1],
+            'support': len(val_targets)
+        })
+        
+        # Ordina per F1 (peggiori prima, ma aggregated sempre ultimo)
+        class_metrics_individual = [x for x in class_metrics_data if 'AGGREGATED' not in x['name']]
+        class_metrics_individual.sort(key=lambda x: x['f1'])
+        class_metrics_aggregated = [x for x in class_metrics_data if 'AGGREGATED' in x['name']]
+        class_metrics_data = class_metrics_individual + class_metrics_aggregated
+        
+        for cls_data in class_metrics_data:
+            # Emoji basato su F1 score
+            if cls_data['f1'] < 0.3:
+                status = "🔴"
+            elif cls_data['f1'] < 0.5:
+                status = "🟡"
+            elif cls_data['f1'] < 0.8:
+                status = "🟢"
+            else:
+                status = "✅"
+            
+            # Formatting speciale per aggregated
+            if 'AGGREGATED' in cls_data['name']:
+                status = "📊"
+                logger.info("-" * 60)
+            
+            logger.info(f"{status} {cls_data['name']:20s}: "
+                    f"F1={cls_data['f1']:.4f} | "
+                    f"P={cls_data['precision']:.4f} | "
+                    f"R={cls_data['recall']:.4f} | "
+                    f"Support={int(cls_data['support']):5d}")
+        
+        # Statistiche generali (solo classi individuali)
+        individual_f1s = [cls['f1'] for cls in class_metrics_individual]
+        avg_f1 = np.mean(individual_f1s)
+        worst_f1 = np.min(individual_f1s)
+        best_f1 = np.max(individual_f1s)
+        critical_classes = len([f1 for f1 in individual_f1s if f1 < 0.3])
+        
+        logger.info("\n" + "-"*40)
+        logger.info(f"Media F1 (classi individuali): {avg_f1:.4f}")
+        logger.info(f"Migliore F1: {best_f1:.4f}")
+        logger.info(f"Peggiore F1: {worst_f1:.4f}")
+        logger.info(f"Classi critiche (F1<0.3): {critical_classes}")
+        logger.info("-"*40)
+
+    def _save_individual_plots(self, val_predictions, val_targets, base_save_path):
+        """
+        Salva ogni grafico separatamente per avere file individuali
+        """
+        from sklearn.metrics import precision_recall_fscore_support
+        import matplotlib.cm as cm
+        
+        # Calcola metriche
+        precision_per_class, recall_per_class, f1_per_class, support_per_class = precision_recall_fscore_support(
+            val_targets, val_predictions, average=None, zero_division=0
+        )
+        _, _, f1_weighted, _ = precision_recall_fscore_support(
+            val_targets, val_predictions, average='weighted', zero_division=0
+        )
+        
+        # Setup colori e posizioni
+        x_pos = np.arange(len(self.class_names))
+        colors = cm.Set3(np.linspace(0, 1, len(self.class_names)))
+        
+        # 1. F1 Score per classe + Aggregated
+        plt.figure(figsize=(12, 8))
+        x_pos_agg = np.arange(len(self.class_names) + 1)
+        f1_with_agg = np.append(f1_per_class, f1_weighted)
+        class_names_with_agg = list(self.class_names) + ['Aggregated']
+        
+        # Colori: classi normali + grigio per aggregated
+        colors_agg = np.vstack([colors, [0.5, 0.5, 0.5, 1.0]])
+        
+        bars = plt.bar(x_pos_agg, f1_with_agg, color=colors_agg, alpha=1.0)
+        plt.title('F1-Scores', fontsize=14, fontweight='bold')
+        plt.xlabel('Classi')
+        plt.ylabel('F1-Score')
+        plt.xticks(x_pos_agg, class_names_with_agg, rotation=45, ha='right')
+        plt.grid(True, alpha=0.3)
+        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
+        
+        for bar, value in zip(bars, f1_with_agg):
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        f1_path = base_save_path.replace('.png', '_f1_scores.png')
+        plt.savefig(f1_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"F1 scores plot salvato in: {f1_path}")
+        
+        # 2. Precision per classe
+        plt.figure(figsize=(12, 8))
+        bars = plt.bar(x_pos, precision_per_class, color=colors, alpha=1.0)
+        plt.title('Precision', fontsize=14, fontweight='bold')
+        plt.xlabel('Classi')
+        plt.ylabel('Precision')
+        plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
+        plt.grid(True, alpha=0.3)
+        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
+        
+        for bar, value in zip(bars, precision_per_class):
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        precision_path = base_save_path.replace('.png', '_precision.png')
+        plt.savefig(precision_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Precision plot salvato in: {precision_path}")
+        
+        # 3. Recall per classe
+        plt.figure(figsize=(12, 8))
+        bars = plt.bar(x_pos, recall_per_class, color=colors, alpha=1.0)
+        plt.title('Recall', fontsize=14, fontweight='bold')
+        plt.xlabel('Classi')
+        plt.ylabel('Recall')
+        plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
+        plt.grid(True, alpha=0.3)
+        plt.ylim(0, 1.15)  # Aumentato per spazio sopra
+        
+        for bar, value in zip(bars, recall_per_class):
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        recall_path = base_save_path.replace('.png', '_recall.png')
+        plt.savefig(recall_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Recall plot salvato in: {recall_path}")
+        
+        # 4. Support per classe
+        plt.figure(figsize=(12, 8))
+        bars = plt.bar(x_pos, support_per_class, color=colors, alpha=1.0)
+        plt.title('Support', fontsize=14, fontweight='bold')
+        plt.xlabel('Classi')
+        plt.ylabel('Numero Campioni')
+        plt.xticks(x_pos, self.class_names, rotation=45, ha='right')
+        plt.grid(True, alpha=0.3)
+        
+        # Per support, calcola lo spazio dinamicamente
+        max_support = max(support_per_class)
+        plt.ylim(0, max_support * 1.15)  # 15% di spazio sopra
+        
+        for bar, value in zip(bars, support_per_class):
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + max_support * 0.02,
+                    f'{int(value)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        support_path = base_save_path.replace('.png', '_support.png')
+        plt.savefig(support_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Support plot salvato in: {support_path}")
+        
+        logger.info("\nTutti i grafici individuali salvati successfully!")
 
 def evaluate_model_multiclass(model, test_loader, device, class_names):
     """Valuta il modello multiclass sul test set - ADATTATO DA BINARIO"""
@@ -509,13 +903,18 @@ def main_pipeline_multiclass(model_size="small"):
             #class_freq=dataset_manager.class_freq  # NUOVO: passa frequenze
         )
         
+
+
+        #####MODIFICATA LA PATIENCE QUI SOTTO
+
+
         # Training
-        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
+        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=2)
         
         # Plot training history
         import os
         os.makedirs("plots", exist_ok=True)
-        trainer.plot_training_history('plots/training_history_crossentropy.png')
+        trainer.plot_training_history('plots/training_history_multiclass.png')
         
         accuracy, precision, recall, f1, predictions, targets, probabilities = evaluate_model_multiclass(
             trained_model, test_loader, device, class_names
@@ -539,7 +938,7 @@ def main_pipeline_multiclass(model_size="small"):
         }, model_path)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"ðŸŽ¯ ADDESTRAMENTO COMPLETATO")
+        logger.info(f"✅ ADDESTRAMENTO COMPLETATO")
         logger.info(f"{'='*60}")
         logger.info(f"Accuracy: {accuracy:.4f}")
         logger.info(f"Weighted F1: {f1:.4f}")

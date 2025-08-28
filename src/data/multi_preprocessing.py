@@ -3,6 +3,8 @@ import numpy as np
 import json
 import os
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+from data.windowing import sliding_window_split_multiclass
+from data.undersampling import uniform_undersampling_to_minority
 
 def load_dataset_config(config_path="config/dataset.json"):
     """Carica la configurazione del dataset"""
@@ -119,73 +121,6 @@ def filter_rare_classes(df, attack_col='Attack', min_samples=5000):
         print(f"✅ Nessuna classe da rimuovere (tutte hanno ≥ {min_samples:,} campioni)")
         return df.copy(), []
 
-def undersample_benign_class(df, attack_col='Attack', undersample_ratio=0.5):
-    """
-    Undersampling parziale della classe Benign mantenendo l'ordine temporale
-    """
-    print(f"\n--- UNDERSAMPLING PARZIALE CLASSE BENIGN ({undersample_ratio*100:.0f}% riduzione) ---")
-    
-    initial_samples = len(df)
-    
-    # Identifica classe benigna
-    benign_mask = df[attack_col].str.lower().isin(['benign', 'normal'])
-    attack_mask = ~benign_mask
-    
-    benign_count = benign_mask.sum()
-    attack_count = attack_mask.sum()
-    
-    print(f"Distribuzione originale:")
-    print(f"  Benign: {benign_count:,} ({benign_count/initial_samples*100:.2f}%)")
-    print(f"  Attack: {attack_count:,} ({attack_count/initial_samples*100:.2f}%)")
-    
-    if benign_count == 0:
-        print("⚠️  Nessun campione benigno trovato, nessun undersampling applicato")
-        return df.copy(), 0
-    
-    # Calcola quanti campioni benign mantenere
-    benign_to_keep = int(benign_count * (1 - undersample_ratio))
-    benign_to_remove = benign_count - benign_to_keep
-    
-    print(f"\nUndersampling Benign:")
-    print(f"  Da mantenere: {benign_to_keep:,}")
-    print(f"  Da rimuovere: {benign_to_remove:,}")
-    
-    # Trova indici dei campioni benigni
-    benign_indices = df[benign_mask].index.tolist()
-    
-    # Undersampling UNIFORME mantenendo ordine temporale
-    # Prendi ogni N-esimo campione benigno per distribuzione uniforme nel tempo
-    step = benign_count / benign_to_keep
-    indices_to_keep = []
-    
-    for i in range(benign_to_keep):
-        idx_position = int(i * step)
-        if idx_position < len(benign_indices):
-            indices_to_keep.append(benign_indices[idx_position])
-    
-    # Crea il dataset sottocampionato
-    # Mantieni tutti gli attacchi + sottocampione benigni selezionati
-    attack_indices = df[attack_mask].index.tolist()
-    final_indices = sorted(attack_indices + indices_to_keep)  # Mantieni ordine temporale
-    
-    df_undersampled = df.loc[final_indices].copy()
-    df_undersampled.reset_index(drop=True, inplace=True)
-    
-    # Statistiche finali
-    final_samples = len(df_undersampled)
-    final_benign = (df_undersampled[attack_col].str.lower().isin(['benign', 'normal'])).sum()
-    final_attack = final_samples - final_benign
-    
-    print(f"\n📊 Risultato undersampling:")
-    print(f"  Campioni totali: {initial_samples:,} → {final_samples:,} (-{initial_samples - final_samples:,})")
-    print(f"  Benign: {benign_count:,} → {final_benign:,} (-{benign_count - final_benign:,})")
-    print(f"  Attack: {attack_count:,} → {final_attack:,} (invariato)")
-    print(f"  Riduzione totale: {((initial_samples - final_samples)/initial_samples)*100:.2f}%")
-    print(f"  Nuova distribuzione Benign: {final_benign/final_samples*100:.2f}%")
-    print(f"  Nuova distribuzione Attack: {final_attack/final_samples*100:.2f}%")
-    
-    return df_undersampled, benign_to_remove
-
 def create_multiclass_encoding(df_train, attack_col='Attack', label_col='Label'):
     """Crea l'encoding per le classi multiclass basandosi solo sul training set"""
     print(f"\n--- CREAZIONE ENCODING MULTICLASS ---")
@@ -233,133 +168,6 @@ def apply_multiclass_encoding(df, label_encoder, attack_col='Attack'):
     
     return df_encoded
 
-def create_micro_windows_indices(df, label_col='Label', attack_col='Attack', 
-                                min_window_size=10, max_window_size=30):
-    """
-    Crea micro-finestre MA salva solo gli INDICI per risparmiare memoria
-    """
-    print(f"\n--- CREAZIONE MICRO-FINESTRE ({min_window_size}-{max_window_size} pacchetti) ---")
-    
-    # Identifica attacchi con logica binaria
-    if df[label_col].dtype == 'object':
-        attack_mask = df[label_col] != 'Benign'
-    else:
-        attack_mask = df[label_col] != 0
-    
-    micro_windows = []
-    current_pos = 0
-    window_id = 0
-    
-    total_len = len(df)
-    progress_interval = max(1, total_len // 100)  # Mostra progresso ogni 1%
-    
-    while current_pos < total_len:
-        remaining_packets = total_len - current_pos
-        max_possible_size = min(max_window_size, remaining_packets)
-        
-        window_size = min_window_size
-        
-        # Determina dimensione finestra
-        lookahead_end = min(current_pos + max_possible_size, total_len)
-        lookahead_attack_ratio = attack_mask.iloc[current_pos:lookahead_end].mean()
-        
-        if lookahead_attack_ratio == 0:
-            window_size = max_possible_size
-        elif lookahead_attack_ratio < 0.1:
-            window_size = min(max_window_size, max_possible_size)
-        else:
-            window_size = min(min_window_size + 5, max_possible_size)
-        
-        end_pos = min(current_pos + window_size, total_len)
-        
-        # Calcola statistiche senza copiare i dati
-        window_attack_mask = attack_mask.iloc[current_pos:end_pos]
-        attack_count = window_attack_mask.sum()
-        attack_ratio = attack_count / (end_pos - current_pos)
-        
-        # SOLO INDICI - nessuna copia dei dati
-        window_info = {
-            'id': window_id,
-            'start_pos': current_pos,
-            'end_pos': end_pos,
-            'size': end_pos - current_pos,
-            'attack_count': attack_count,
-            'attack_ratio': attack_ratio,
-            'benign_count': (end_pos - current_pos) - attack_count,
-        }
-        
-        micro_windows.append(window_info)
-        current_pos = end_pos
-        window_id += 1
-        
-        # Mostra progresso
-        if window_id % progress_interval == 0 or current_pos >= total_len:
-            progress = (current_pos / total_len) * 100
-            print(f"  Progresso: {progress:.1f}% ({window_id:,} finestre)")
-    
-    print(f"Totale micro-finestre create: {len(micro_windows)}")
-    
-    # Statistiche finali
-    sizes = [w['size'] for w in micro_windows]
-    attack_ratios = [w['attack_ratio'] for w in micro_windows]
-    
-    print(f"\nStatistiche Micro-Finestre:")
-    print(f"  Dimensione media: {np.mean(sizes):.1f} pacchetti")
-    print(f"  Range dimensioni: {min(sizes)}-{max(sizes)} pacchetti")
-    print(f"  Finestre con attacchi: {sum(1 for r in attack_ratios if r > 0)} ({sum(1 for r in attack_ratios if r > 0)/len(attack_ratios)*100:.1f}%)")
-    
-    return micro_windows
-
-def stratified_window_assignment(micro_windows, train_ratio=0.70, val_ratio=0.15, test_ratio=0.15):
-    """Assegna le micro-finestre ai set usando logica binaria"""
-    print(f"\n--- ASSEGNAZIONE STRATIFICATA MICRO-FINESTRE ({train_ratio*100:.0f}-{val_ratio*100:.0f}-{test_ratio*100:.0f}) ---")
-    
-    # Categorizza finestre per contenuto binario
-    pure_benign = [w for w in micro_windows if w['attack_ratio'] == 0]
-    low_attack = [w for w in micro_windows if 0 < w['attack_ratio'] <= 0.2]
-    medium_attack = [w for w in micro_windows if 0.2 < w['attack_ratio'] <= 0.6]
-    high_attack = [w for w in micro_windows if w['attack_ratio'] > 0.6]
-    
-    categories = {
-        'pure_benign': pure_benign,
-        'low_attack': low_attack, 
-        'medium_attack': medium_attack,
-        'high_attack': high_attack
-    }
-    
-    print("Distribuzione categorie micro-finestre:")
-    for name, windows in categories.items():
-        print(f"  {name}: {len(windows)} finestre ({len(windows)/len(micro_windows)*100:.1f}%)")
-    
-    # Distribuzione round-robin
-    train_windows, val_windows, test_windows = [], [], []
-    
-    for category_name, windows in categories.items():
-        if len(windows) == 0:
-            continue
-        
-        for i, window in enumerate(windows):
-            cycle_pos = i % 20  # Pattern 70-15-15
-            
-            if cycle_pos < 14:  # 70% train
-                train_windows.append(window)
-            elif cycle_pos < 17:  # 15% val
-                val_windows.append(window)
-            else:  # 15% test
-                test_windows.append(window)
-    
-    # Ordina per posizione temporale
-    train_windows.sort(key=lambda x: x['start_pos'])
-    val_windows.sort(key=lambda x: x['start_pos'])
-    test_windows.sort(key=lambda x: x['start_pos'])
-    
-    print(f"\nTotale finestre assegnate:")
-    print(f"  Train: {len(train_windows)} finestre")
-    print(f"  Validation: {len(val_windows)} finestre")
-    print(f"  Test: {len(test_windows)} finestre")
-    
-    return train_windows, val_windows, test_windows
-
 def extract_datasets_from_indices(df, train_windows, val_windows, test_windows):
     """
     Estrae i dataset usando gli indici - MEMORY EFFICIENT
@@ -395,36 +203,9 @@ def extract_datasets_from_indices(df, train_windows, val_windows, test_windows):
     
     return train_data, val_data, test_data
 
-def micro_window_split_multiclass(df, label_col='Label', attack_col='Attack',
-                                 train_ratio=0.70, val_ratio=0.15, test_ratio=0.15, 
-                                 min_window_size=10, max_window_size=30):
-    """Split con micro-finestre per multiclass - MEMORY OPTIMIZED"""
-    print("MICRO-WINDOW STRATIFIED TEMPORAL SPLIT - MULTICLASS")
-    print("=" * 70)
-    
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-    
-    # Crea micro-finestre (solo indici)
-    micro_windows = create_micro_windows_indices(df, label_col, attack_col, min_window_size, max_window_size)
-    
-    if len(micro_windows) < 3:
-        raise ValueError("Troppo poche micro-finestre per creare train/val/test set")
-    
-    # Assegnazione stratificata
-    train_windows, val_windows, test_windows = stratified_window_assignment(
-        micro_windows, train_ratio, val_ratio, test_ratio
-    )
-    
-    # Estrazione dataset usando indici
-    train_data, val_data, test_data = extract_datasets_from_indices(
-        df, train_windows, val_windows, test_windows
-    )
-    
-    return train_data, val_data, test_data
-
 def preprocess_dataset_multiclass(dataset_path, config_path, output_dir, 
                                  train_ratio=0.70, val_ratio=0.15, test_ratio=0.15,
-                                 min_window_size=10, max_window_size=30,
+                                 window_size=10,
                                  label_col='Label', attack_col='Attack',
                                  min_samples_per_class=10000,
                                  benign_undersample_ratio=0.5):
@@ -486,14 +267,6 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
     
     print(f"\nFeatures utilizzate: {len(feature_columns)} di {len(expected_features)} configurate")
 
-    # Undersampling dei pacchetti benign
-    df_undersampled, removed_benign_count = undersample_benign_class(df, attack_col, undersample_ratio=benign_undersample_ratio)
-
-    if removed_benign_count:
-        print(f"\n⚠️  Dataset ha subito un undersampling dei benigni: rimosse {(removed_benign_count)} pacchetti benigni")
-        # Aggiorna il DataFrame di lavoro
-        df = df_undersampled
-
     # Rimuovo tutte le classi con meno dei sample minimi stabiliti
     df_filtered, removed_classes = filter_rare_classes(df, attack_col, min_samples=min_samples_per_class)
 
@@ -502,12 +275,19 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
         # Aggiorna il DataFrame di lavoro
         df = df_filtered
         
+    df_undersampled, total_removed_samples = uniform_undersampling_to_minority(df, attack_col)
+
+    if total_removed_samples > 0:
+        print(f"\n⚠️  Dataset ha subito undersampling uniforme: rimosse {total_removed_samples:,} campioni")
+        
+        # Aggiorna il DataFrame di lavoro
+        df = df_undersampled
+
     analyze_multiclass_distribution(df, label_col, attack_col)
 
-    # Split con micro-finestre (MEMORY OPTIMIZED)
-    train_data, val_data, test_data = micro_window_split_multiclass(
-        df, label_col, attack_col, train_ratio, val_ratio, test_ratio, 
-        min_window_size, max_window_size
+    # Split con micro-finestre
+    train_data, val_data, test_data = sliding_window_split_multiclass(
+        df, window_size, train_ratio, val_ratio, test_ratio
     )
     
     # Libera memoria del dataset originale
@@ -596,8 +376,7 @@ def preprocess_dataset_multiclass(dataset_path, config_path, output_dir,
         'train_ratio': train_ratio,
         'val_ratio': val_ratio,
         'test_ratio': test_ratio,
-        'min_window_size': min_window_size,
-        'max_window_size': max_window_size,
+        'window_size': window_size,
         'removed_rare_classes': removed_classes,
         'min_samples_threshold': min_samples_per_class,
         'benign_undersample_ratio': benign_undersample_ratio,
@@ -653,8 +432,7 @@ if __name__ == "__main__":
         train_ratio=0.70,
         val_ratio=0.15,
         test_ratio=0.15,
-        min_window_size=10,
-        max_window_size=30,
+        window_size=10,
         label_col='Label',
         attack_col='Attack',
         min_samples_per_class=10000
