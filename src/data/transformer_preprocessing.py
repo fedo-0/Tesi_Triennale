@@ -263,20 +263,37 @@ def apply_multiclass_encoding(df, label_encoder, attack_col='Attack'):
     
     return df_encoded
 
+def create_feature_groups(feature_columns, numeric_columns, categorical_columns):
+
+    numeric_features = [col for col in numeric_columns if col in feature_columns]
+    categorical_features = [col for col in categorical_columns if col in feature_columns]
+    
+    feature_groups = {
+        'numeric': {
+            'columns': numeric_features,
+            'count': len(numeric_features),
+            'type': 'continuous'
+        },
+        'categorical': {
+            'columns': categorical_features,
+            'count': len(categorical_features),
+            'type': 'embedded'
+        }
+    }
+    
+    print(f"Feature groups creati:")
+    print(f"  - Numeriche: {len(numeric_features)}")
+    print(f"  - Categoriche: {len(categorical_features)}")
+    
+    return feature_groups
+
 def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
                                  label_col='Label', attack_col='Attack',
                                  sequence_length=64, sequence_stride=1,
                                  min_freq_categorical=10, max_vocab_size=10000):
-    """
-    Preprocessing per Transformer temporale partendo da split già puliti
-    Input: train.csv, val.csv, test.csv già puliti e ordinati temporalmente
-    Output: sequenze temporali per architettura Transformer
-    """
     
     print("PREPROCESSING TEMPORALE PER TRANSFORMER")
     print("=" * 55)
-    print("Input: Dataset già puliti, divisi e ordinati temporalmente")
-    print("Output: Sequenze temporali per classificazione Transformer")
     
     # Carica configurazione
     config = load_dataset_config(config_path)
@@ -327,6 +344,9 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     print(f"\nFeatures utilizzate: {len(feature_columns)} di {len(expected_features)} configurate")
     print(f"- Numeriche: {len([col for col in numeric_columns if col in feature_columns])}")
     print(f"- Categoriche: {len([col for col in categorical_columns if col in feature_columns])}")
+
+    # Crea gruppi di features
+    feature_groups = create_feature_groups(feature_columns, numeric_columns, categorical_columns)
     
     # === FASE 2: CREAZIONE ENCODING MULTICLASS ===
     print(f"\n=== FASE 2: CREAZIONE ENCODING MULTICLASS ===")
@@ -339,7 +359,7 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     train_data_encoded = apply_multiclass_encoding(train_data, label_encoder, attack_col)
     val_data_encoded = apply_multiclass_encoding(val_data, label_encoder, attack_col)
     test_data_encoded = apply_multiclass_encoding(test_data, label_encoder, attack_col)
-    
+
     # === FASE 3: PREPROCESSING FEATURES ===
     print(f"\n=== FASE 3: PREPROCESSING FEATURES ===")
     
@@ -441,6 +461,7 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
         'class_mapping': class_mapping,
         'n_classes': len(label_encoder.classes_),
         'feature_columns': feature_columns,
+        'feature_groups': feature_groups,
         'preprocessing_applied': {
             'temporal_sequences': True,
             'embedding_mappings': True,
