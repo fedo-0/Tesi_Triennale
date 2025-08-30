@@ -30,7 +30,8 @@ def split (input_path: str, output_dir: str):
         window_size=10,
         label_col='Label',
         attack_col='Attack',
-        min_samples_per_class=10000
+        #min_samples_per_class=10000 #10k per tonv3
+        min_samples_per_class=2000 #2k per nb15
     )
 
     logger.info("✅ Clean e Split del dataset completato con successo!")
