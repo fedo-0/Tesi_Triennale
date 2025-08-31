@@ -1,8 +1,6 @@
 import sys
 import logging
 
-import pandas as pd
-
 from utilities.logging_config import setup_logging
 from utilities.argument_parser import ArgumentParser
 
@@ -19,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 def split (input_path: str, output_dir: str):
     logger.info("Pulizia e Divisione del dataset in corso...")
-    
+    min_samples=10000
+    if (input_path=="resources/datasets/NF-UNSW-NB15-v3.csv"):
+        min_samples=2000
     clean_and_split_dataset(
         dataset_path=input_path,
         config_path="config/dataset.json",
@@ -30,8 +30,7 @@ def split (input_path: str, output_dir: str):
         window_size=10,
         label_col='Label',
         attack_col='Attack',
-        #min_samples_per_class=10000 #10k per tonv3
-        min_samples_per_class=2000 #2k per nb15
+        min_samples_per_class=min_samples
     )
 
     logger.info("✅ Clean e Split del dataset completato con successo!")
