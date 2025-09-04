@@ -25,6 +25,7 @@ class ModelTrainerMulticlass:
         self.device = device
         self.n_classes = n_classes
         self.class_names = class_names
+        self.class_freq = class_freq
 
         # Tracking delle metriche
         self.train_losses = []
@@ -45,8 +46,22 @@ class ModelTrainerMulticlass:
         )
         
         # Funzione di Loss
-        self.criterion = nn.CrossEntropyLoss()
-        logger.info("✅ Usando CrossEntropyLoss standard")
+        #self.criterion = nn.CrossEntropyLoss()
+        #logger.info("✅ Usando CrossEntropyLoss standard")
+        if class_freq is not None:
+            # Calcola pesi inversi alla frequenza
+            total_samples = sum(class_freq.values())
+            class_weights = []
+            for class_id in sorted(class_freq.keys()):
+                weight = total_samples / (len(class_freq) * class_freq[class_id])
+                class_weights.append(weight)
+            
+            weight_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
+            self.criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+            logger.info(f"✅ Usando CrossEntropyLoss pesata per frequenza: {class_weights}")
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+            logger.info("❌ Usando CrossEntropyLoss standard")
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -422,7 +437,7 @@ class ModelTrainerMulticlass:
             logger.info(f"Macro - Precision: {precision_m:.4f}, Recall: {recall_m:.4f}, F1: {f1_m:.4f}")
         
         plt.tight_layout()
-        plt.subplots_adjust(left=0.25)  # Lascia spazio per il testo delle metriche
+        plt.subplots_adjust(left=0.25)
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -854,13 +869,10 @@ def main_pipeline_multiclass(model_size="small"):
             device,
             dataset_manager.n_classes,
             class_names,
-            #class_weights=dataset_manager.class_weights,
-            #class_freq=dataset_manager.class_freq  # NUOVO: passa frequenze
+            class_weights=dataset_manager.class_weights,
+            class_freq=dataset_manager.class_freq
         )
         
-
-
-        ##### MODIFICATA LA PATIENCE QUI SOTTO
         # Training
         trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
         

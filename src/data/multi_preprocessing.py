@@ -136,6 +136,8 @@ def preprocess_dataset_multiclass(clean_split_dir, config_path, output_dir,
     config = load_dataset_config(config_path)
     numeric_columns = config['numeric_columns']
     categorical_columns = config['categorical_columns']
+    ip_columns = ['IPV4_SRC_ADDR', 'IPV4_DST_ADDR']
+    categorical_columns = [col for col in categorical_columns if col not in ip_columns]
     
     print(f"\nConfigurazione caricata:")
     print(f"- Colonne numeriche: {len(numeric_columns)}")

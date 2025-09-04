@@ -40,6 +40,8 @@
       "RETRANSMITTED_IN_BYTES"
     ],
     "categorical_columns": [
+      "IPV4_SRC_ADDR",
+      "IPV4_DST_ADDR",
       "L4_SRC_PORT",
       "L4_DST_PORT",
       "PROTOCOL",

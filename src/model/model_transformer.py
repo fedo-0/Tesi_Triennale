@@ -85,8 +85,30 @@ class NetworkTrafficTransformer(nn.Module):
         
         self.config = config
         self.n_classes = n_classes
-        self.feature_groups = feature_groups
-        self.vocab_sizes = vocab_sizes or {}
+        ip_columns = ['IPV4_SRC_ADDR', 'IPV4_DST_ADDR']
+        
+        cleaned_feature_groups = {
+            'numeric': {
+                'columns': [col for col in feature_groups.get('numeric', {}).get('columns', []) 
+                        if col not in ip_columns],
+                'count': len([col for col in feature_groups.get('numeric', {}).get('columns', []) 
+                            if col not in ip_columns]),
+                'type': 'continuous'
+            },
+            'categorical': {
+                'columns': [col for col in feature_groups.get('categorical', {}).get('columns', []) 
+                        if col not in ip_columns],
+                'count': len([col for col in feature_groups.get('categorical', {}).get('columns', []) 
+                            if col not in ip_columns]),
+                'type': 'embedded'
+            }
+        }
+        self.feature_groups = cleaned_feature_groups
+
+
+        cleaned_vocab_sizes = {col: size for col, size in (vocab_sizes or {}).items() 
+                          if col not in ip_columns}
+        self.vocab_sizes = cleaned_vocab_sizes or {}
         
         # Parametri architettura
         self.d_model = config['d_model']

@@ -260,7 +260,7 @@ class ModelTrainerTransformer:
         
         return avg_loss, accuracy, predictions, targets, probabilities
     
-    def train(self, train_loader, val_loader, epochs=100, patience=20):
+    def train(self, train_loader, val_loader, epochs=100, patience=15):
 
         logger.info(f"Inizio addestramento TRANSFORMER TEMPORALE per {epochs} epochs...")
         logger.info(f"Device: {self.device}")
@@ -709,7 +709,7 @@ def main_pipeline_transformer(model_size="small"):
         )
         
         # Training con patience maggiore per Transformer
-        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=10)
+        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
         
         # Plot training history
         import os
