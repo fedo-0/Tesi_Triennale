@@ -1,5 +1,7 @@
 # Custom skipped files
 resources/
+plots/
+models/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
