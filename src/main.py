@@ -62,8 +62,8 @@ def prepare_transformer(input_path: str, output_dir: str):
             output_dir=output_dir,
             label_col='Label',
             attack_col='Attack',
-            sequence_length=64,
-            sequence_stride=32,
+            sequence_length=8,
+            sequence_stride=1,
             min_freq_categorical=10,
             max_vocab_size=10000
         )

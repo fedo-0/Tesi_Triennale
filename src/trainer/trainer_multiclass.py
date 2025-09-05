@@ -860,9 +860,8 @@ def main_pipeline_multiclass(model_size="small"):
         
 
 
-        ##### MODIFICATA LA PATIENCE QUI SOTTO
         # Training
-        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=15)
+        trained_model = trainer.train(train_loader, val_loader, epochs=100, patience=10)
         
         # Plot training history
         import os
