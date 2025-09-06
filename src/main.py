@@ -63,7 +63,6 @@ def prepare_transformer(input_path: str, output_dir: str):
             label_col='Label',
             attack_col='Attack',
             sequence_length=8,
-            sequence_stride=1,
             min_freq_categorical=10,
             max_vocab_size=10000
         )
@@ -87,7 +86,7 @@ def run_multiclassifier (model_size:str):
 
 def run_transformer (model_size:str):
     logger.info("Preparando il trasformer per la classificazione multiclasse...")
-    main_pipeline_transformer(model_size="small")
+    main_pipeline_transformer(model_size="small", window_size=8)
     logger.info("✅ Training completato con successo!")
 
 if __name__ == "__main__":

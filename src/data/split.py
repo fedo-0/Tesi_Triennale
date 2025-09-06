@@ -174,6 +174,7 @@ def clean_and_split_dataset(dataset_path, config_path, output_dir,
         # Analisi distribuzione dopo filtraggio
         analyze_multiclass_distribution(df_clean, label_col, attack_col)
     
+    """
     # === FASE 3: UNDERSAMPLING UNIFORME ===
     print(f"\n=== FASE 3: UNDERSAMPLING UNIFORME ===")
     
@@ -187,6 +188,7 @@ def clean_and_split_dataset(dataset_path, config_path, output_dir,
         analyze_multiclass_distribution(df_clean, label_col, attack_col)
     else:
         print("✅ Nessun undersampling necessario")
+    """
 
     # === FASE 4: DIVISIONE CON MICRO-FINESTRE ===
     print(f"\n=== FASE 4: DIVISIONE CON MICRO-FINESTRE ===")
@@ -256,7 +258,7 @@ def clean_and_split_dataset(dataset_path, config_path, output_dir,
         'cleaning_stats': {
             'removed_nan_rows': int(removed_rows),
             'removed_rare_classes': removed_classes,
-            'undersampled_samples': int(total_removed_samples)
+        #    'undersampled_samples': int(total_removed_samples)
         },
         'columns_info': {
             'label_col': label_col,
@@ -301,8 +303,8 @@ def clean_and_split_dataset(dataset_path, config_path, output_dir,
     print(f"✅ Pulizia completata: -{removed_rows:,} righe con NaN/inf")
     if removed_classes:
         print(f"✅ Classi rare filtrate: -{len(removed_classes)} classi")
-    if total_removed_samples > 0:
-        print(f"✅ Undersampling applicato: -{total_removed_samples:,} campioni")
+    #if total_removed_samples > 0:
+    #    print(f"✅ Undersampling applicato: -{total_removed_samples:,} campioni")
     print(f"✅ Split temporale completato: {total_after_split:,} campioni finali")
     print(f"✅ Dataset pronti per processing architettura-specifico")
     

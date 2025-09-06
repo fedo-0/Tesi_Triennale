@@ -8,6 +8,7 @@ import math
 from utilities.logging_config import setup_logging
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.utils.class_weight import compute_class_weight
+from data.samplers import RandomSlidingWindowSampler
 
 # Setup logging
 setup_logging()
@@ -224,13 +225,11 @@ class NetworkTrafficDatasetTransformer:
         try:
             with open(hyperparams_path, 'r') as f:
                 hyperparams_data = json.load(f)
-                # Cerca config specifici per transformer, altrimenti usa default
                 if 'transformer' in hyperparams_data:
                     self.hyperparams = hyperparams_data['transformer'][model_size]
                 else:
-                    # Config di default per Transformer
                     self.hyperparams = {
-                        'batch_size': 32,  # Più piccolo per sequenze
+                        'batch_size': 32,
                         'lr': 0.0003,
                         'weight_decay': 1e-4,
                         'd_model': 128,
@@ -276,46 +275,29 @@ class NetworkTrafficDatasetTransformer:
         logger.info(f"  Vocab sizes: {self.vocab_sizes}")
         logger.info(f"  Hyperparams: {self.hyperparams}")
     
-    def load_temporal_data(self, train_npz_path, val_npz_path, test_npz_path):
+    def load_processed_data(self, train_csv_path, val_csv_path, test_csv_path):
        
-        logger.info("Caricamento sequenze temporali...")
+        logger.info("Caricamento dataset processati...")
         
-        # Carica i file NPZ
-        train_data = np.load(train_npz_path)
-        val_data = np.load(val_npz_path)
-        test_data = np.load(test_npz_path)
+        train_df = pd.read_csv(train_csv_path)
+        val_df = pd.read_csv(val_csv_path)
+        test_df = pd.read_csv(test_csv_path)
         
-        # Estrai sequenze e target
-        self.X_train = train_data['sequences'].astype(np.float32)  # (N, seq_len, features)
-        self.y_train = train_data['targets'].astype(np.int64)      # (N,)
+        logger.info(f"Dataset processati caricati:")
+        logger.info(f"  Training: {train_df.shape[0]:,} campioni")
+        logger.info(f"  Validation: {val_df.shape[0]:,} campioni") 
+        logger.info(f"  Test: {test_df.shape[0]:,} campioni")
         
-        self.X_val = val_data['sequences'].astype(np.float32)
-        self.y_val = val_data['targets'].astype(np.int64)
+        self.X_train = train_df[self.feature_columns].values.astype(np.float32)
+        self.y_train = train_df['multiclass_target'].values.astype(np.int64)
         
-        self.X_test = test_data['sequences'].astype(np.float32)
-        self.y_test = test_data['targets'].astype(np.int64)
+        self.X_val = val_df[self.feature_columns].values.astype(np.float32)
+        self.y_val = val_df['multiclass_target'].values.astype(np.int64)
         
-        logger.info(f"Sequenze temporali caricate:")
-        logger.info(f"  Training: {self.X_train.shape} -> {self.y_train.shape}")
-        logger.info(f"  Validation: {self.X_val.shape} -> {self.y_val.shape}")
-        logger.info(f"  Test: {self.X_test.shape} -> {self.y_test.shape}")
+        self.X_test = test_df[self.feature_columns].values.astype(np.float32)
+        self.y_test = test_df['multiclass_target'].values.astype(np.int64)
         
-        # Verifica coerenza dimensioni
-        expected_seq_len = self.sequence_length
-        expected_features = len(self.feature_columns)
-        
-        if self.X_train.shape[1] != expected_seq_len:
-            logger.warning(f"Sequence length mismatch: {self.X_train.shape[1]} vs {expected_seq_len}")
-        
-        if self.X_train.shape[2] != expected_features:
-            logger.warning(f"Feature count mismatch: {self.X_train.shape[2]} vs {expected_features}")
-        
-        # Analizza distribuzione target nelle sequenze
-        self.analyze_sequence_distribution(self.y_train, "Training")
-        self.analyze_sequence_distribution(self.y_val, "Validation")
-        self.analyze_sequence_distribution(self.y_test, "Test")
-        
-        # Calcola class weights per le sequenze
+        # Calcola class weights
         try:
             class_weights = compute_class_weight(
                 'balanced',
@@ -323,31 +305,18 @@ class NetworkTrafficDatasetTransformer:
                 y=self.y_train
             )
             self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
-            logger.info(f"Class weights per sequenze: {class_weights}")
+            logger.info(f"Class weights calcolati: {class_weights}")
         except Exception as e:
             logger.warning(f"Impossibile calcolare class weights: {e}")
             self.class_weights = None
         
-        return self.X_train.shape[2]  # Restituisce feature_dim
-    
-    def analyze_sequence_distribution(self, targets, set_name):
-        """Analizza distribuzione classi nelle sequenze"""
-        unique, counts = np.unique(targets, return_counts=True)
-        total = len(targets)
-        
-        logger.info(f"\n{set_name} Sequences Distribution:")
-        for class_idx, count in zip(unique, counts):
-            class_name = self.temporal_metadata['label_encoder_classes'][class_idx]
-            percentage = (count / total) * 100
-            class_type = "Benigno" if class_name.lower() in ['benign', 'normal'] else "Attacco"
-            logger.info(f"  {class_name} ({class_idx}): {count:,} sequenze ({percentage:.2f}%) - {class_type}")
-    
+        return self.X_train.shape[1]
+
     def separate_features(self, sequences):
-       
         numeric_cols = self.feature_groups.get('numeric', {}).get('columns', [])
         categorical_cols = self.feature_groups.get('categorical', {}).get('columns', [])
         
-        # Trova indici delle colonne
+        # Trova indici delle colonne (IDENTICO a prima)
         numeric_indices = []
         categorical_indices = []
         
@@ -372,13 +341,13 @@ class NetworkTrafficDatasetTransformer:
                 categorical_features[col] = sequences[:, :, col_idx].long()
         
         return numeric_features, categorical_features
-    
-    def create_dataloaders(self):
 
+    def create_dataloaders(self, window_size=8, seed=42):
+        
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         
-        # Crea TensorDataset
+        # Crea dataset base
         train_dataset = TensorDataset(
             torch.FloatTensor(self.X_train),
             torch.LongTensor(self.y_train)
@@ -392,36 +361,54 @@ class NetworkTrafficDatasetTransformer:
             torch.LongTensor(self.y_test)
         )
         
-        train_loader = DataLoader(
-            train_dataset, 
-            batch_size=batch_size, 
-            shuffle=True,
-            num_workers=2 if use_cuda else 0,
-            pin_memory=use_cuda
-        )
-
-        val_loader = DataLoader(
-            val_dataset, 
-            batch_size=batch_size, 
-            shuffle=False,
-            num_workers=1 if use_cuda else 0,
-            pin_memory=use_cuda
-        )
-        test_loader = DataLoader(
-            test_dataset, 
-            batch_size=batch_size, 
-            shuffle=False,
-            num_workers=1 if use_cuda else 0,
-            pin_memory=use_cuda
-        )
+        # Crea samplers
+        train_sampler = RandomSlidingWindowSampler(train_dataset, window_size, seed)
+        val_sampler = RandomSlidingWindowSampler(val_dataset, window_size, seed + 1)
+        test_sampler = RandomSlidingWindowSampler(test_dataset, window_size, seed + 2)
         
-        logger.info(f"DataLoaders temporali creati:")
-        logger.info(f"  Train: {len(train_loader)} batch di {batch_size} sequenze")
-        logger.info(f"  Val: {len(val_loader)} batch di {batch_size} sequenze")
-        logger.info(f"  Test: {len(test_loader)} batch di {batch_size} sequenze")
+        # Wrapper del DataLoader che usa il sampler direttamente
+        class SamplerDataLoader:
+            def __init__(self, dataset, sampler, batch_size):
+                self.dataset = dataset
+                self.sampler = sampler
+                self.batch_size = batch_size
+            
+            def __iter__(self):
+                batch_sequences = []
+                batch_targets = []
+                
+                for sequence_indices in self.sampler:
+                    # sequence_indices = [0, 1, 2, 3, 4, 5, 6, 7] dal sampler
+                    sequence = torch.stack([self.dataset[i][0] for i in sequence_indices])
+                    target = self.dataset[sequence_indices[-1]][1]
+                    
+                    batch_sequences.append(sequence)
+                    batch_targets.append(target)
+                    
+                    if len(batch_sequences) == self.batch_size:
+                        yield torch.stack(batch_sequences), torch.stack(batch_targets)
+                        batch_sequences = []
+                        batch_targets = []
+                
+                # Ultimo batch parziale se presente
+                if batch_sequences:
+                    yield torch.stack(batch_sequences), torch.stack(batch_targets)
+            
+            def __len__(self):
+                return (len(self.sampler) + self.batch_size - 1) // self.batch_size
+        
+        # Crea i DataLoader wrapper
+        train_loader = SamplerDataLoader(train_dataset, train_sampler, batch_size)
+        val_loader = SamplerDataLoader(val_dataset, val_sampler, batch_size)
+        test_loader = SamplerDataLoader(test_dataset, test_sampler, batch_size)
+        
+        logger.info(f"DataLoaders con RandomSlidingWindowSampler creati:")
+        logger.info(f"  Window size: {window_size}")
+        logger.info(f"  Train: {len(train_loader)} batch")
+        logger.info(f"  Val: {len(val_loader)} batch")
+        logger.info(f"  Test: {len(test_loader)} batch")
         
         return train_loader, val_loader, test_loader
-
 
 def save_model_transformer(model, hyperparams, feature_columns, filepath, 
                           n_classes, class_mapping, feature_groups, vocab_sizes=None, 

@@ -105,102 +105,6 @@ def normalize_numeric_features(df_train, df_val, df_test, numeric_columns):
     
     return df_train_norm, df_val_norm, df_test_norm, normalization_params, numeric_cols_present
 
-def create_temporal_sequences(df, feature_columns, target_col, sequence_length, stride=1):
-    """
-    Crea sequenze temporali per il Transformer
-    
-    Args:
-        df: DataFrame con dati ordinati temporalmente
-        feature_columns: Lista delle colonne features
-        target_col: Nome colonna target
-        sequence_length: Lunghezza delle sequenze (es. 32, 64, 128)
-        stride: Passo tra sequenze consecutive (1 = overlap massimo)
-        
-    Returns:
-        sequences: Array (num_sequences, sequence_length, num_features)
-        targets: Array (num_sequences,) - target dell'ultimo elemento di ogni sequenza
-        sequence_info: Dict con informazioni sulle sequenze create
-    """
-    
-    print(f"\n--- CREAZIONE SEQUENZE TEMPORALI ---")
-    print(f"Parametri:")
-    print(f"  - Lunghezza sequenza: {sequence_length}")
-    print(f"  - Stride: {stride}")
-    print(f"  - Features per timestep: {len(feature_columns)}")
-    
-    total_samples = len(df)
-    
-    # Calcola numero di sequenze possibili
-    num_sequences = (total_samples - sequence_length) // stride + 1
-    
-    if num_sequences <= 0:
-        raise ValueError(f"Dataset troppo piccolo per creare sequenze. "
-                        f"Samples: {total_samples}, Sequence length: {sequence_length}")
-    
-    # Prepara arrays
-    sequences = np.zeros((num_sequences, sequence_length, len(feature_columns)), dtype=np.float32)
-    targets = np.zeros(num_sequences, dtype=np.int32)
-    
-    # Estrai features e target
-    features_data = df[feature_columns].values
-    targets_data = df[target_col].values
-    
-    # Crea sequenze
-    for i in range(num_sequences):
-        start_idx = i * stride
-        end_idx = start_idx + sequence_length
-        
-        # Sequenza: (sequence_length, num_features)
-        sequences[i] = features_data[start_idx:end_idx]
-        
-        # Target: etichetta dell'ultimo elemento della sequenza
-        targets[i] = targets_data[end_idx - 1]
-    
-    sequence_info = {
-        'total_samples': total_samples,
-        'num_sequences': num_sequences,
-        'sequence_length': sequence_length,
-        'num_features': len(feature_columns),
-        'stride': stride,
-        'coverage': f"{num_sequences * stride + sequence_length - 1}/{total_samples}",
-        'utilization': (num_sequences * stride + sequence_length - 1) / total_samples
-    }
-    
-    print(f"Sequenze create:")
-    print(f"  - Totali: {num_sequences:,}")
-    print(f"  - Shape: ({num_sequences}, {sequence_length}, {len(feature_columns)})")
-    print(f"  - Copertura dataset: {sequence_info['coverage']} ({sequence_info['utilization']:.1%})")
-    
-    return sequences, targets, sequence_info
-
-def save_temporal_sequences(sequences, targets, sequence_info, output_path, set_name):
-    """
-    Salva le sequenze temporali in formato efficiente
-    Usa NPZ per arrays grandi (più efficiente di CSV per dati 3D)
-    """
-    
-    # Crea il file NPZ con sequences e targets
-    npz_path = output_path.replace('.csv', '.npz')
-    
-    np.savez_compressed(npz_path, 
-                       sequences=sequences,
-                       targets=targets,
-                       **sequence_info)
-    
-    print(f"- {set_name}: {npz_path} ({sequences.shape[0]:,} sequenze)")
-    
-    # Crea anche un CSV con informazioni di base (per debug/ispezione)
-    summary_df = pd.DataFrame({
-        'sequence_id': range(len(targets)),
-        'target': targets,
-        'sequence_start_idx': [i * sequence_info['stride'] for i in range(len(targets))]
-    })
-    
-    summary_csv_path = output_path.replace('.csv', '_sequences_summary.csv')
-    summary_df.to_csv(summary_csv_path, index=False)
-    
-    return npz_path, summary_csv_path
-
 def analyze_temporal_distribution(targets, label_encoder, set_name="Dataset"):
     """Analizza la distribuzione delle classi nelle sequenze"""
     print(f"\n--- DISTRIBUZIONE SEQUENZE {set_name.upper()} ---")
@@ -289,13 +193,12 @@ def create_feature_groups(feature_columns, numeric_columns, categorical_columns)
 
 def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
                                  label_col='Label', attack_col='Attack',
-                                 sequence_length=64, sequence_stride=1,
+                                 sequence_length=8,
                                  min_freq_categorical=10, max_vocab_size=10000):
     
     print("PREPROCESSING TEMPORALE PER TRANSFORMER")
     print("=" * 55)
     
-    # Carica configurazione
     config = load_dataset_config(config_path)
     numeric_columns = config['numeric_columns']
     categorical_columns = config['categorical_columns']
@@ -304,9 +207,6 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     print(f"- Colonne numeriche: {len(numeric_columns)}")
     print(f"- Colonne categoriche: {len(categorical_columns)}")
     print(f"- Lunghezza sequenze: {sequence_length}")
-    print(f"- Stride sequenze: {sequence_stride}")
-    print(f"- Min freq per vocabolari: {min_freq_categorical}")
-    print(f"- Max dimensione vocabolario: {max_vocab_size}")
     
     # === FASE 1: CARICAMENTO DATASET ORDINATI TEMPORALMENTE ===
     print(f"\n=== FASE 1: CARICAMENTO DATASET ORDINATI ===")
@@ -315,13 +215,11 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     val_path = os.path.join(clean_split_dir, "val.csv")
     test_path = os.path.join(clean_split_dir, "test.csv")
     
-    # Verifica esistenza file
     for path, name in [(train_path, "train"), (val_path, "val"), (test_path, "test")]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"File {name} non trovato: {path}")
     
-    # Carica dataset (MANTENGONO L'ORDINE TEMPORALE)
-    print("Caricamento dataset ordinati temporalmente...")
+
     train_data = pd.read_csv(train_path)
     val_data = pd.read_csv(val_path)
     test_data = pd.read_csv(test_path)
@@ -330,14 +228,14 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     print(f"- Validation: {val_data.shape[0]:,} campioni temporali")
     print(f"- Test: {test_data.shape[0]:,} campioni temporali")
     
-    # Verifica colonne target
+
     for df_name, df in [("train", train_data), ("val", val_data), ("test", test_data)]:
         if label_col not in df.columns:
             raise ValueError(f"Colonna label '{label_col}' non trovata nel dataset {df_name}!")
         if attack_col not in df.columns:
             raise ValueError(f"Colonna attack '{attack_col}' non trovata nel dataset {df_name}!")
     
-    # Identifica features disponibili
+
     expected_features = numeric_columns + categorical_columns
     feature_columns = [col for col in expected_features if col in train_data.columns]
     
@@ -345,16 +243,13 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     print(f"- Numeriche: {len([col for col in numeric_columns if col in feature_columns])}")
     print(f"- Categoriche: {len([col for col in categorical_columns if col in feature_columns])}")
 
-    # Crea gruppi di features
     feature_groups = create_feature_groups(feature_columns, numeric_columns, categorical_columns)
     
     # === FASE 2: CREAZIONE ENCODING MULTICLASS ===
     print(f"\n=== FASE 2: CREAZIONE ENCODING MULTICLASS ===")
     
-    # Crea encoding basato solo su training set
     label_encoder, class_mapping = create_multiclass_encoding(train_data, attack_col, label_col)
     
-    # Applica encoding a tutti i set MANTENENDO L'ORDINE
     print(f"\nApplicazione encoding (preservando ordine temporale)...")
     train_data_encoded = apply_multiclass_encoding(train_data, label_encoder, attack_col)
     val_data_encoded = apply_multiclass_encoding(val_data, label_encoder, attack_col)
@@ -373,89 +268,62 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     embedding_mappings, vocab_stats = create_embedding_mappings(
         X_train, categorical_columns, min_freq=min_freq_categorical, max_vocab_size=max_vocab_size
     )
-    
-    # Applica mappings PRESERVANDO L'ORDINE
+
     X_train_embedded = apply_embedding_mappings(X_train, embedding_mappings)
     X_val_embedded = apply_embedding_mappings(X_val, embedding_mappings)
     X_test_embedded = apply_embedding_mappings(X_test, embedding_mappings)
     
     print(f"- Vocabolari creati: {len(embedding_mappings)}")
     
-    # 2. Normalizzazione features numeriche PRESERVANDO L'ORDINE
+    # 2. Normalizzazione features numeriche
     print("\nNormalizzazione Min-Max per features numeriche...")
     X_train_processed, X_val_processed, X_test_processed, normalization_params, numeric_cols_present = normalize_numeric_features(
         X_train_embedded, X_val_embedded, X_test_embedded, numeric_columns
     )
     
     print(f"- Features numeriche normalizzate: {len(numeric_cols_present)}")
+
+    # === FASE 4: SALVATAGGIO DATASET PROCESSATI (SENZA SEQUENZE) ===
+    print(f"\n=== FASE 4: SALVATAGGIO DATASET PROCESSATI ===")
     
-    # === FASE 4: CREAZIONE SEQUENZE TEMPORALI ===
-    print(f"\n=== FASE 4: CREAZIONE SEQUENZE TEMPORALI ===")
-    
-    # Crea sequenze per training set
-    print("Training sequences:")
-    train_sequences, train_seq_targets, train_seq_info = create_temporal_sequences(
-        pd.concat([X_train_processed, train_data_encoded[['multiclass_target']]], axis=1),
-        feature_columns, 'multiclass_target', sequence_length, sequence_stride
-    )
-    
-    # Crea sequenze per validation set  
-    print("\nValidation sequences:")
-    val_sequences, val_seq_targets, val_seq_info = create_temporal_sequences(
-        pd.concat([X_val_processed, val_data_encoded[['multiclass_target']]], axis=1),
-        feature_columns, 'multiclass_target', sequence_length, sequence_stride
-    )
-    
-    # Crea sequenze per test set
-    print("\nTest sequences:")
-    test_sequences, test_seq_targets, test_seq_info = create_temporal_sequences(
-        pd.concat([X_test_processed, test_data_encoded[['multiclass_target']]], axis=1),
-        feature_columns, 'multiclass_target', sequence_length, sequence_stride
-    )
-    
-    # === FASE 5: SALVATAGGIO SEQUENZE TEMPORALI ===
-    print(f"\n=== FASE 5: SALVATAGGIO SEQUENZE TEMPORALI ===")
-    
-    # Crea directory output
     os.makedirs(output_dir, exist_ok=True)
     
-    # Salva sequenze in formato NPZ (efficiente per arrays 3D)
-    train_npz, train_summary = save_temporal_sequences(
-        train_sequences, train_seq_targets, train_seq_info,
-        os.path.join(output_dir, "train_transformer.csv"), "Training"
-    )
+    train_processed_path = os.path.join(output_dir, "train_transformer_processed.csv")
+    val_processed_path = os.path.join(output_dir, "val_transformer_processed.csv")
+    test_processed_path = os.path.join(output_dir, "test_transformer_processed.csv")
     
-    val_npz, val_summary = save_temporal_sequences(
-        val_sequences, val_seq_targets, val_seq_info,
-        os.path.join(output_dir, "val_transformer.csv"), "Validation"
-    )
+    train_final = pd.concat([X_train_processed, train_data_encoded[['multiclass_target']]], axis=1)
+    val_final = pd.concat([X_val_processed, val_data_encoded[['multiclass_target']]], axis=1)
+    test_final = pd.concat([X_test_processed, test_data_encoded[['multiclass_target']]], axis=1)
     
-    test_npz, test_summary = save_temporal_sequences(
-        test_sequences, test_seq_targets, test_seq_info,
-        os.path.join(output_dir, "test_transformer.csv"), "Test"
-    )
+    train_final.to_csv(train_processed_path, index=False)
+    val_final.to_csv(val_processed_path, index=False)
+    test_final.to_csv(test_processed_path, index=False)
     
-    print("Dataset Transformer temporali salvati:")
-    print(f"- Training NPZ: {train_npz}")
-    print(f"- Validation NPZ: {val_npz}")
-    print(f"- Test NPZ: {test_npz}")
+    print(f"Dataset processati salvati:")
+    print(f"- Training: {train_processed_path} ({len(train_final):,} campioni)")
+    print(f"- Validation: {val_processed_path} ({len(val_final):,} campioni)")
+    print(f"- Test: {test_processed_path} ({len(test_final):,} campioni)")
     
-    # === FASE 6: SALVATAGGIO METADATI ===
-    print(f"\n=== FASE 6: SALVATAGGIO METADATI ===")
+    # === FASE 5: SALVATAGGIO METADATI ===
+    print(f"\n=== FASE 5: SALVATAGGIO METADATI ===")
     
-    # Metadati completi per Transformer temporale
+    # Metadati per Transformer con sampler
     transformer_metadata = {
-        'architecture': 'Temporal_Transformer',
+        'architecture': 'Temporal_Transformer_with_Sampler',
         'temporal_config': {
             'sequence_length': sequence_length,
-            'sequence_stride': sequence_stride,
-            'feature_dim': len(feature_columns)
+            'feature_dim': len(feature_columns),
+            'uses_random_sampler': True,
+            'sampler_type': 'RandomSlidingWindowSampler'
         },
         'dataset_info': {
-            'train_sequences': int(train_seq_info['num_sequences']),
-            'val_sequences': int(val_seq_info['num_sequences']),
-            'test_sequences': int(test_seq_info['num_sequences']),
-            'total_sequences': int(train_seq_info['num_sequences'] + val_seq_info['num_sequences'] + test_seq_info['num_sequences'])
+            'train_samples': int(len(train_final)),
+            'val_samples': int(len(val_final)),
+            'test_samples': int(len(test_final)),
+            'max_possible_sequences_train': max(0, len(train_final) - sequence_length + 1),
+            'max_possible_sequences_val': max(0, len(val_final) - sequence_length + 1),
+            'max_possible_sequences_test': max(0, len(test_final) - sequence_length + 1)
         },
         'label_encoder_classes': label_encoder.classes_.tolist(),
         'class_mapping': class_mapping,
@@ -463,10 +331,11 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
         'feature_columns': feature_columns,
         'feature_groups': feature_groups,
         'preprocessing_applied': {
-            'temporal_sequences': True,
+            'temporal_sequences': False,
             'embedding_mappings': True,
             'min_max_normalization': True,
-            'order_preservation': True
+            'order_preservation': True,
+            'dynamic_sampling': True
         },
         'embedding_config': {
             'min_frequency_threshold': min_freq_categorical,
@@ -479,80 +348,48 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
             'params': normalization_params
         },
         'file_paths': {
-            'train_npz': train_npz,
-            'val_npz': val_npz,
-            'test_npz': test_npz,
-            'train_summary': train_summary,
-            'val_summary': val_summary,
-            'test_summary': test_summary
+            'train_csv': train_processed_path,
+            'val_csv': val_processed_path,
+            'test_csv': test_processed_path
         },
         'input_source': clean_split_dir,
-        'preprocessing_version': 'temporal_transformer_v1.0',
+        'preprocessing_version': 'temporal_transformer_sampler_v1.0',
         'timestamp': pd.Timestamp.now().isoformat()
     }
     
-    # Salva metadati
     metadata_path = os.path.join(output_dir, "transformer_metadata.json")
     with open(metadata_path, 'w') as f:
         json.dump(transformer_metadata, f, indent=2)
-    
-    # Salva mappings e parametri
-    mappings_path = os.path.join(output_dir, "transformer_mappings.json")
+
     mappings_data = {
         'embedding_mappings': embedding_mappings,
         'class_mapping': class_mapping,
         'normalization_params': normalization_params,
         'vocab_stats': vocab_stats,
-        'sequence_info': {
-            'train': train_seq_info,
-            'val': val_seq_info,
-            'test': test_seq_info
+        'dataset_stats': {
+            'train_shape': list(X_train_processed.shape),
+            'val_shape': list(X_val_processed.shape),
+            'test_shape': list(X_test_processed.shape)
         }
     }
-    with open(mappings_path, 'w') as f:
+    mapping_path = "resources/datasets/transformer_mappings.json"
+    with open(mapping_path, 'w') as f:
         json.dump(mappings_data, f, indent=2)
-    
-    # Salva label encoder
+
+    # Label encoder (invariato)
     encoder_path = os.path.join(output_dir, "transformer_label_encoder.pkl")
     with open(encoder_path, 'wb') as f:
         pickle.dump(label_encoder, f)
     
     print(f"- Metadati: {metadata_path}")
-    print(f"- Mappings: {mappings_path}")
+    print(f"- Mappings: {mapping_path}")
     print(f"- Label encoder: {encoder_path}")
     
-    # === ANALISI FINALE ===
-    print(f"\n=== ANALISI DISTRIBUZIONE TEMPORALE ===")
-    
-    # Analizza distribuzione delle sequenze
-    analyze_temporal_distribution(train_seq_targets, label_encoder, "Training")
-    analyze_temporal_distribution(val_seq_targets, label_encoder, "Validation")  
-    analyze_temporal_distribution(test_seq_targets, label_encoder, "Test")
-    
-    print(f"\nRIEPILOGO PREPROCESSING TEMPORALE:")
-    print(f"Dataset caricati da: {clean_split_dir}")
-    print(f"Encoding multiclasse: {len(label_encoder.classes_)} classi")
-    print(f"Sequenze temporali create:")
-    print(f"  - Training: {train_seq_info['num_sequences']:,} sequenze")
-    print(f"  - Validation: {val_seq_info['num_sequences']:,} sequenze")
-    print(f"  - Test: {test_seq_info['num_sequences']:,} sequenze")
-    print(f"  - Lunghezza: {sequence_length} timesteps")
-    print(f"  - Features per timestep: {len(feature_columns)}")
-    print(f"Embedding mappings: {len(embedding_mappings)} vocabolari categorici")
-    print(f"Min-Max normalization: {len(numeric_cols_present)} colonne numeriche")
-    print(f"Dataset temporali salvati in: {output_dir}")
-    print(f"Pronti per training Transformer temporale")
-    
     return {
-        'sequences': {
-            'train': train_sequences,
-            'val': val_sequences,
-            'test': test_sequences
-        },
-        'targets': {
-            'train': train_seq_targets,
-            'val': val_seq_targets,
-            'test': test_seq_targets
+        'datasets': {
+            'train': train_final,
+            'val': val_final,
+            'test': test_final
         },
         'metadata': transformer_metadata,
         'mappings': mappings_data,
@@ -567,8 +404,7 @@ if __name__ == "__main__":
         output_dir="resources/datasets",
         label_col='Label',
         attack_col='Attack',
-        sequence_length=64,  # Lunghezza sequenze temporali
-        sequence_stride=1,   # Overlap massimo tra sequenze
+        sequence_length=8,
         min_freq_categorical=10,
         max_vocab_size=10000
     )

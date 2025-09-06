@@ -51,7 +51,7 @@ class ModelTrainerTransformer:
         # Loss function
         if class_weights is not None:
             self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-            logger.info("Usando CrossEntropyLoss con class weights")
+            logger.info("✅ Usando CrossEntropyLoss con class weights")
         else:
             self.criterion = nn.CrossEntropyLoss()
             logger.info("Usando CrossEntropyLoss standard")
@@ -260,7 +260,7 @@ class ModelTrainerTransformer:
         
         return avg_loss, accuracy, predictions, targets, probabilities
     
-    def train(self, train_loader, val_loader, epochs=100, patience=20):
+    def train(self, train_loader, val_loader, epochs=100, patience=10):
 
         logger.info(f"Inizio addestramento TRANSFORMER TEMPORALE per {epochs} epochs...")
         logger.info(f"Device: {self.device}")
@@ -321,6 +321,11 @@ class ModelTrainerTransformer:
             else:
                 patience_counter += 1
                 logger.info(f"Patience: {patience_counter}/{patience}")
+                if val_loss > train_loss * 1.2:
+                    overfitting_gap = val_loss - train_loss
+                    logger.info(f"⚠️  Overfitting rilevato: val_loss ({val_loss:.4f}) > train_loss ({train_loss:.4f}), gap: {overfitting_gap:.4f}")
+                    logger.info(f"Stopping per overfitting dopo {epoch+1} epochs")
+                    break
                 if patience_counter >= patience:
                     logger.info(f"Early stopping dopo {epoch+1} epochs (patience: {patience})")
                     break
@@ -663,7 +668,7 @@ def evaluate_model_transformer(model, test_loader, device, class_names, dataset_
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
 
-def main_pipeline_transformer(model_size="small"):
+def main_pipeline_transformer(model_size="small", window_size=8):
     """Pipeline principale per training Transformer temporale"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
@@ -671,21 +676,21 @@ def main_pipeline_transformer(model_size="small"):
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
     
     try:
-        # Dataset manager per sequenze temporali
         dataset_manager = NetworkTrafficDatasetTransformer(
             model_size=model_size,
             metadata_path="resources/datasets/transformer_metadata.json"
         )
         
-        # Carica sequenze temporali dai file NPZ
-        feature_dim = dataset_manager.load_temporal_data(
-            train_npz_path="resources/datasets/train_transformer.npz",
-            val_npz_path="resources/datasets/val_transformer.npz",
-            test_npz_path="resources/datasets/test_transformer.npz"
+        feature_dim = dataset_manager.load_processed_data(
+            train_csv_path="resources/datasets/train_transformer_processed.csv",
+            val_csv_path="resources/datasets/val_transformer_processed.csv",
+            test_csv_path="resources/datasets/test_transformer_processed.csv"
         )
         
-        # Crea DataLoaders per sequenze
-        train_loader, val_loader, test_loader = dataset_manager.create_dataloaders()
+
+        train_loader, val_loader, test_loader = dataset_manager.create_dataloaders(
+            window_size=window_size, seed=42
+        )
         
         # Modello Transformer
         model = NetworkTrafficTransformer(
@@ -694,7 +699,7 @@ def main_pipeline_transformer(model_size="small"):
             dataset_manager.feature_groups,
             dataset_manager.vocab_sizes
         )
-        logger.info(f"Modello Transformer creato con {sum(p.numel() for p in model.parameters()):,} parametri")
+
         
         # Trainer
         class_names = dataset_manager.temporal_metadata['label_encoder_classes']
@@ -758,4 +763,4 @@ def main_pipeline_transformer(model_size="small"):
 
 
 if __name__ == "__main__":
-    main_pipeline_transformer(model_size="small")
+    main_pipeline_transformer(model_size="small", window_size=8)
