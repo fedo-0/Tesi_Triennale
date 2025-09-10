@@ -89,6 +89,33 @@ def run_transformer (model_size:str):
     main_pipeline_transformer(model_size="small", window_size=8)
     logger.info("✅ Training completato con successo!")
 
+def run_all():
+    logger.info("> > > > > > TON_V3")
+    logger.info("Gia splittato e preparato il dataset")
+    prepare_transformer("resources/datasets", "resources/datasets")
+    run_transformer("small")
+    prepare_mlp("resources/datasets", "resources/datasets")
+    run_multiclassifier("small")
+    logger.info("✅ terminato addestramento sul dataset TONV3")
+
+    logger.info("> > > > > > NB_15")
+    split("resources/datasets/NF-UNSW-NB15-v3.csv", "resources/datasets")
+    prepare_transformer("resources/datasets", "resources/datasets")
+    run_transformer("small")
+    prepare_mlp("resources/datasets", "resources/datasets")
+    run_multiclassifier("small")
+    logger.info("✅ terminato addestramento sul dataset NB_15")
+    
+    logger.info("> > > > > > CIC_2018")
+    split("resources/datasets/cic_2018_v3.csv", "resources/datasets")
+    prepare_transformer("resources/datasets", "resources/datasets")
+    run_transformer("small")
+    prepare_mlp("resources/datasets", "resources/datasets")
+    run_multiclassifier("small")
+    logger.info("✅ terminato addestramento sul dataset CIC_2018")
+
+    
+
 if __name__ == "__main__":
     parser = ArgumentParser("parser")
 
@@ -153,3 +180,5 @@ if __name__ == "__main__":
         run_multiclassifier(args.model_size)
     elif args.subcommand == "runtrans":
         run_transformer(args.model_size)
+    elif args.subcommand == "runall":
+        run_all()

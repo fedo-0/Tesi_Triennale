@@ -242,7 +242,7 @@ class NetworkTrafficDatasetMulticlass:
                 logger.error(f"   Mancante: {class_name} (ID: {missing_class})")
             raise ValueError("Il training set deve contenere tutte le classi!")
         
-        # Calcola class weights standard (per compatibilitÃ )
+        # Calcola class weights standard (per compatibilità )
         try:
             class_weights = compute_class_weight(
                 'balanced',
@@ -256,13 +256,13 @@ class NetworkTrafficDatasetMulticlass:
             self.class_weights = None
         
         # Calcola frequenze per funzione di Loss - PUO SERVIRE PER UPGRADARE LA LOSS
-        #self.class_freq = {}
-        #unique, counts = np.unique(self.y_train, return_counts=True)
-        #for class_id, count in zip(unique, counts):
-        #    self.class_freq[class_id] = int(count)
-        #logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
+        self.class_freq = {}
+        unique, counts = np.unique(self.y_train, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            self.class_freq[class_id] = int(count)
+        logger.info(f"Frequenze classi per Loss Function: {self.class_freq}")
         
-        self.class_freq = None
+        #self.class_freq = None
         logger.info(f"Input dimension: {self.X_train.shape[1]}")
         
         return self.X_train.shape[1]

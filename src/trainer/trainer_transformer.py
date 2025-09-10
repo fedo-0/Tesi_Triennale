@@ -58,7 +58,7 @@ class ModelTrainerTransformer:
         
         # Scheduler più appropriato per Transformer
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.7, patience=8, verbose=True, min_lr=1e-6
+            self.optimizer, mode='min', factor=0.7, patience=8, min_lr=1e-6
         )
         
         logger.info(f"Trainer Transformer inizializzato:")
@@ -442,7 +442,7 @@ class ModelTrainerTransformer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Training history plot salvato in: {save_path}")
         
-        plt.show()
+        #plt.show()
         
         # Crea plot separato per metriche per classe se disponibili
         if val_predictions is not None and val_targets is not None:
@@ -528,7 +528,7 @@ class ModelTrainerTransformer:
             plt.savefig(per_class_save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Per-class metrics plot salvato in: {per_class_save_path}")
         
-        plt.show()
+        #plt.show()
         
         # Log delle metriche per classe
         logger.info("\n" + "="*70)
@@ -663,7 +663,7 @@ def evaluate_model_transformer(model, test_loader, device, class_names, dataset_
                         ha='center', va='center', fontsize=8, color='red')
     
     plt.tight_layout()
-    plt.show()
+    #plt.show()
     
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
@@ -719,7 +719,8 @@ def main_pipeline_transformer(model_size="small", window_size=8):
         # Plot training history
         import os
         os.makedirs("plots", exist_ok=True)
-        trainer.plot_training_history('plots/training_history_transformer.png')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trainer.plot_training_history(f'plots/transformer_training_history_{timestamp}.png')
         
         # Evaluation
         accuracy, precision, recall, f1, predictions, targets, probabilities = evaluate_model_transformer(

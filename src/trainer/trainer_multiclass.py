@@ -45,12 +45,16 @@ class ModelTrainerMulticlass:
         )
         
         # Funzione di Loss
-        self.criterion = nn.CrossEntropyLoss()
-        logger.info("✅ Usando CrossEntropyLoss standard")
+        if class_weights is not None:
+            self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+            logger.info("✅ Usando CrossEntropyLoss con class weights")
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+            logger.info("Usando CrossEntropyLoss standard")
         
         # Scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=10, verbose=True
+            self.optimizer, mode='min', factor=0.5, patience=10
         )
         
         # Tracking delle metriche
@@ -428,7 +432,7 @@ class ModelTrainerMulticlass:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Training history plot salvato in: {save_path}")
         
-        plt.show()
+        #plt.show()
         
         # Crea plot separato per metriche per classe se disponibili
         if val_predictions is not None and val_targets is not None:
@@ -525,7 +529,7 @@ class ModelTrainerMulticlass:
             plt.savefig(per_class_save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Per-class metrics plot salvato in: {per_class_save_path}")
         
-        plt.show()
+        #plt.show()
         
         # Salva anche i singoli grafici separatamente
         if base_save_path:
@@ -777,7 +781,7 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
                         ha='center', va='center', fontsize=8, color='red')
     
     plt.tight_layout()
-    plt.show()
+    #plt.show()
     
     # Plot distribuzione predizioni per classe
     plt.figure(figsize=(15, 5))
@@ -809,7 +813,7 @@ def evaluate_model_multiclass(model, test_loader, device, class_names):
     plt.ylim(0, 1)
     
     plt.tight_layout()
-    plt.show()
+    #plt.show()
     
     return accuracy, precision_weighted, recall_weighted, f1_weighted, predictions, targets, probabilities
 
@@ -854,8 +858,8 @@ def main_pipeline_multiclass(model_size="small"):
             device,
             dataset_manager.n_classes,
             class_names,
-            #class_weights=dataset_manager.class_weights,
-            #class_freq=dataset_manager.class_freq  # NUOVO: passa frequenze
+            class_weights=dataset_manager.class_weights,
+            class_freq=dataset_manager.class_freq  # passa frequenze
         )
         
 
@@ -866,7 +870,8 @@ def main_pipeline_multiclass(model_size="small"):
         # Plot training history
         import os
         os.makedirs("plots", exist_ok=True)
-        trainer.plot_training_history('plots/training_history_multiclass.png')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trainer.plot_training_history(f'plots/mlp_training_history_{timestamp}.png')
         
         accuracy, precision, recall, f1, predictions, targets, probabilities = evaluate_model_multiclass(
             trained_model, test_loader, device, class_names

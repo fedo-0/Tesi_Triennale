@@ -292,6 +292,7 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     val_processed_path = os.path.join(output_dir, "val_transformer_processed.csv")
     test_processed_path = os.path.join(output_dir, "test_transformer_processed.csv")
     
+    """
     train_final = pd.concat([X_train_processed, train_data_encoded[['multiclass_target']]], axis=1)
     val_final = pd.concat([X_val_processed, val_data_encoded[['multiclass_target']]], axis=1)
     test_final = pd.concat([X_test_processed, test_data_encoded[['multiclass_target']]], axis=1)
@@ -299,11 +300,24 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     train_final.to_csv(train_processed_path, index=False)
     val_final.to_csv(val_processed_path, index=False)
     test_final.to_csv(test_processed_path, index=False)
-    
+
     print(f"Dataset processati salvati:")
     print(f"- Training: {train_processed_path} ({len(train_final):,} campioni)")
     print(f"- Validation: {val_processed_path} ({len(val_final):,} campioni)")
     print(f"- Test: {test_processed_path} ({len(test_final):,} campioni)")
+    """
+    X_train_processed['multiclass_target'] = train_data_encoded['multiclass_target'].values
+    X_val_processed['multiclass_target'] = val_data_encoded['multiclass_target'].values  
+    X_test_processed['multiclass_target'] = test_data_encoded['multiclass_target'].values
+
+    X_train_processed.to_csv(train_processed_path, index=False)
+    X_val_processed.to_csv(val_processed_path, index=False)
+    X_test_processed.to_csv(test_processed_path, index=False)
+
+    print(f"Dataset processati salvati:")
+    print(f"- Training: {train_processed_path} ({len(X_train_processed):,} campioni)")
+    print(f"- Validation: {val_processed_path} ({len(X_val_processed):,} campioni)")
+    print(f"- Test: {test_processed_path} ({len(X_test_processed):,} campioni)")
     
     # === FASE 5: SALVATAGGIO METADATI ===
     print(f"\n=== FASE 5: SALVATAGGIO METADATI ===")
@@ -318,12 +332,12 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
             'sampler_type': 'RandomSlidingWindowSampler'
         },
         'dataset_info': {
-            'train_samples': int(len(train_final)),
-            'val_samples': int(len(val_final)),
-            'test_samples': int(len(test_final)),
-            'max_possible_sequences_train': max(0, len(train_final) - sequence_length + 1),
-            'max_possible_sequences_val': max(0, len(val_final) - sequence_length + 1),
-            'max_possible_sequences_test': max(0, len(test_final) - sequence_length + 1)
+            'train_samples': int(len(X_train_processed)),
+            'val_samples': int(len(X_val_processed)),
+            'test_samples': int(len(X_test_processed)),
+            'max_possible_sequences_train': max(0, len(X_train_processed) - sequence_length + 1),
+            'max_possible_sequences_val': max(0, len(X_val_processed) - sequence_length + 1),
+            'max_possible_sequences_test': max(0, len(X_test_processed) - sequence_length + 1)
         },
         'label_encoder_classes': label_encoder.classes_.tolist(),
         'class_mapping': class_mapping,
@@ -387,9 +401,9 @@ def preprocess_dataset_transformer(clean_split_dir, config_path, output_dir,
     
     return {
         'datasets': {
-            'train': train_final,
-            'val': val_final,
-            'test': test_final
+            'train': X_train_processed,
+            'val': X_val_processed,
+            'test': X_test_processed
         },
         'metadata': transformer_metadata,
         'mappings': mappings_data,

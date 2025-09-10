@@ -46,6 +46,10 @@ Create and activate a Python virtual environment:
 python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 ```
 
+SULLA VIRTUAL MAC:
+source .venv/bin/activate
+
+
 To run the script, use:
 
 ```bash

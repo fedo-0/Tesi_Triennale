@@ -341,7 +341,8 @@ class NetworkTrafficDatasetTransformer:
                 categorical_features[col] = sequences[:, :, col_idx].long()
         
         return numeric_features, categorical_features
-
+        
+    """
     def create_dataloaders(self, window_size=8, seed=42):
         
         batch_size = self.hyperparams['batch_size']
@@ -366,7 +367,6 @@ class NetworkTrafficDatasetTransformer:
         val_sampler = RandomSlidingWindowSampler(val_dataset, window_size, seed + 1)
         test_sampler = RandomSlidingWindowSampler(test_dataset, window_size, seed + 2)
         
-        # Wrapper del DataLoader che usa il sampler direttamente
         class SamplerDataLoader:
             def __init__(self, dataset, sampler, batch_size):
                 self.dataset = dataset
@@ -409,6 +409,116 @@ class NetworkTrafficDatasetTransformer:
         logger.info(f"  Test: {len(test_loader)} batch")
         
         return train_loader, val_loader, test_loader
+
+    """
+    def create_dataloaders(self, window_size=8, seed=42):
+        
+        batch_size = self.hyperparams['batch_size']
+        use_cuda = torch.cuda.is_available()
+        
+        class SlidingWindowDataset(torch.utils.data.Dataset):
+            def __init__(self, X, y, window_size, seed):
+                self.X = X
+                self.y = y
+                self.window_size = window_size
+                
+                # Genera tutti gli indici possibili per le finestre
+                self.window_starts = list(range(len(X) - window_size + 1))
+                
+                # Mescola gli indici per simulare il RandomSlidingWindowSampler
+                import random
+                random.seed(seed)
+                random.shuffle(self.window_starts)
+                
+            def __len__(self):
+                return len(self.window_starts)
+            
+            def __getitem__(self, idx):
+                # Ottieni l'indice di partenza per questa finestra
+                start_idx = self.window_starts[idx]
+                end_idx = start_idx + self.window_size
+                
+                # Crea la sequenza
+                sequence = torch.FloatTensor(self.X[start_idx:end_idx])
+                target = torch.LongTensor([self.y[end_idx - 1]])[0]  # Target dell'ultimo elemento
+                
+                return sequence, target
+            
+            def reshuffle(self, seed):
+                import random
+                random.seed(seed)
+                random.shuffle(self.window_starts)
+        
+        # Crea dataset
+        train_dataset = SlidingWindowDataset(self.X_train, self.y_train, window_size, seed)
+        val_dataset = SlidingWindowDataset(self.X_val, self.y_val, window_size, seed + 1) 
+        test_dataset = SlidingWindowDataset(self.X_test, self.y_test, window_size, seed + 2)
+        
+        # DataLoader standard con multiprocessing
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,  # Shuffle aggiuntivo
+            num_workers=8,  # Multiprocessing abilitato!
+            pin_memory=use_cuda,
+            persistent_workers=True,
+            prefetch_factor=2,
+            drop_last=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=use_cuda,
+            persistent_workers=True,
+            prefetch_factor=1,
+            drop_last=False
+        )
+        
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=use_cuda,
+            persistent_workers=True,
+            prefetch_factor=1,
+            drop_last=False
+        )
+        
+        # Wrapper per gestire il reshuffling tra epoche
+        class EpochAwareDataLoader:
+            def __init__(self, dataloader, dataset):
+                self.dataloader = dataloader
+                self.dataset = dataset
+                self.epoch = 0
+                
+            def __iter__(self):
+                # Rimescola il dataset ad ogni epoca (simula RandomSlidingWindowSampler)
+                if hasattr(self.dataset, 'reshuffle'):
+                    self.dataset.reshuffle(self.epoch + 42)  # Seed diverso per ogni epoca
+                    self.epoch += 1
+                return iter(self.dataloader)
+            
+            def __len__(self):
+                return len(self.dataloader)
+        
+        # Wrap dei loader per il reshuffling
+        train_loader_wrapped = EpochAwareDataLoader(train_loader, train_dataset)
+        val_loader_wrapped = EpochAwareDataLoader(val_loader, val_dataset)
+        test_loader_wrapped = EpochAwareDataLoader(test_loader, test_dataset)
+        
+        logger.info(f"DataLoaders simulando RandomSlidingWindowSampler creati:")
+        logger.info(f"  Window size: {window_size}")
+        logger.info(f"  Workers: train=8, val/test=4")
+        logger.info(f"  Multiprocessing: ABILITATO")
+        logger.info(f"  Train: {len(train_loader)} batch")
+        logger.info(f"  Val: {len(val_loader)} batch") 
+        logger.info(f"  Test: {len(test_loader)} batch")
+        
+        return train_loader_wrapped, val_loader_wrapped, test_loader_wrapped
 
 def save_model_transformer(model, hyperparams, feature_columns, filepath, 
                           n_classes, class_mapping, feature_groups, vocab_sizes=None, 
