@@ -4,6 +4,7 @@ import json
 import os
 from data.windowing import sliding_window_split_multiclass
 from data.undersampling import uniform_undersampling_to_minority
+from data.undersampling import proportional_temporal_undersampling
 
 def load_dataset_config(config_path="config/dataset.json"):
     """Carica la configurazione del dataset"""
@@ -174,21 +175,23 @@ def clean_and_split_dataset(dataset_path, config_path, output_dir,
         # Analisi distribuzione dopo filtraggio
         analyze_multiclass_distribution(df_clean, label_col, attack_col)
     
-    """
     # === FASE 3: UNDERSAMPLING UNIFORME ===
     print(f"\n=== FASE 3: UNDERSAMPLING UNIFORME ===")
-    
-    df_undersampled, total_removed_samples = uniform_undersampling_to_minority(df_clean, attack_col)
+    if dataset_path != "resources/datasets/NF-UNSW-NB15-v3.csv":
+        #df_undersampled, total_removed_samples = uniform_undersampling_to_minority(df_clean, attack_col)
+        df_undersampled, total_removed_samples = proportional_temporal_undersampling(df_clean, attack_col, 0.1)
 
-    if total_removed_samples > 0:
-        print(f"\n⚠️  Applicato undersampling uniforme: rimosse {total_removed_samples:,} campioni")
-        df_clean = df_undersampled
-        
-        # Analisi distribuzione finale
-        analyze_multiclass_distribution(df_clean, label_col, attack_col)
+        if total_removed_samples > 0:
+            print(f"\n⚠️  Applicato undersampling uniforme: rimosse {total_removed_samples:,} campioni")
+            df_clean = df_undersampled
+            
+            # Analisi distribuzione finale
+            analyze_multiclass_distribution(df_clean, label_col, attack_col)
+        else:
+            print("👍 Nessun undersampling necessario")
     else:
-        print("✅ Nessun undersampling necessario")
-    """
+        print("👍 Nessun undersampling necessario")
+
 
     # === FASE 4: DIVISIONE CON MICRO-FINESTRE ===
     print(f"\n=== FASE 4: DIVISIONE CON MICRO-FINESTRE ===")

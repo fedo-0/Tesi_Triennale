@@ -524,7 +524,7 @@ class ModelTrainerTransformer:
         
         # Salva il plot per classe se specificato
         if base_save_path:
-            per_class_save_path = base_save_path.replace('.png', '_transformer_per_class_metrics.png')
+            per_class_save_path = base_save_path.replace('.png', '_per_class_metrics.png')
             plt.savefig(per_class_save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Per-class metrics plot salvato in: {per_class_save_path}")
         

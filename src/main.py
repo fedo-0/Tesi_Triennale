@@ -19,7 +19,7 @@ def split (input_path: str, output_dir: str):
     logger.info("Pulizia e Divisione del dataset in corso...")
     min_samples=10000
     if (input_path=="resources/datasets/NF-UNSW-NB15-v3.csv"):
-        min_samples=2000
+        min_samples=1000
     clean_and_split_dataset(
         dataset_path=input_path,
         config_path="config/dataset.json",
@@ -91,7 +91,7 @@ def run_transformer (model_size:str):
 
 def run_all():
     logger.info("> > > > > > TON_V3")
-    logger.info("Gia splittato e preparato il dataset")
+    split("resources/datasets/dataset_ton_v3.csv")
     prepare_transformer("resources/datasets", "resources/datasets")
     run_transformer("small")
     prepare_mlp("resources/datasets", "resources/datasets")
