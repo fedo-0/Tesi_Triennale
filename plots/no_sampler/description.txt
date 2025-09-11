@@ -1,0 +1,5 @@
+cartella con tutti i risultati dei 3 dataset:
+- SENZA sampler
+- con early stopping per overfitting (val loss > train loss *1.2)
+- contiene sia risultati con finestre da 64 pacchetti (32 di stride)
+  che con le finestre da 8 (4 di stride)

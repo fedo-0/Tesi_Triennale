@@ -89,9 +89,9 @@ def run_transformer (model_size:str):
     main_pipeline_transformer(model_size="small", window_size=8)
     logger.info("✅ Training completato con successo!")
 
-def run_all():
+def run_all(model_size: str):
     logger.info("> > > > > > TON_V3")
-    split("resources/datasets/dataset_ton_v3.csv")
+    split("resources/datasets/dataset_ton_v3.csv", "resources/datasets")
     prepare_transformer("resources/datasets", "resources/datasets")
     run_transformer("small")
     prepare_mlp("resources/datasets", "resources/datasets")
@@ -114,7 +114,8 @@ def run_all():
     run_multiclassifier("small")
     logger.info("✅ terminato addestramento sul dataset CIC_2018")
 
-    
+def test_plot (trans_path: str, mlp_path: str):
+    logger.info("Testing and Plot delle metriche sul test set")
 
 if __name__ == "__main__":
     parser = ArgumentParser("parser")
@@ -164,6 +165,21 @@ if __name__ == "__main__":
             "The model size: small, medium, or large.",
         ],
         defaults=["small"]
+    ).register_subcommand(
+        subcommand="runall",
+        arguments=["--model-size"],
+        helps=[
+            "The model size: small, medium, or large.",
+        ],
+        defaults=["small"]
+    ).register_subcommand(
+        subcommand="split",
+        arguments=["--trans", "--mlp"],
+        helps=[
+            "The trans path of the model.",
+            "The mlp path of the model.",
+        ],
+        defaults=["models/TON_best_transformer_20250910_191111.pth", "models/TON_best_mlp_multiclass_20250910_234927.pth"],
     )
 
     args = parser.parse_arguments(sys.argv[1:])
@@ -181,4 +197,6 @@ if __name__ == "__main__":
     elif args.subcommand == "runtrans":
         run_transformer(args.model_size)
     elif args.subcommand == "runall":
-        run_all()
+        run_all(args.model_size)
+    elif args.subcommand == "testandplot":
+        test_plot(args.trans_path, args.mlp_path)
