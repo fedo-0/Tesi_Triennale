@@ -347,7 +347,7 @@ class ModelTrainerMulticlass:
         ax1.set_title('Model Loss', fontsize=14, fontweight='bold')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Loss')
-        ax1.legend()
+        ax1.legend().show(False)
         ax1.grid(True, alpha=0.3)
         
         # Accuracy
@@ -355,7 +355,7 @@ class ModelTrainerMulticlass:
         ax2.set_title('Model Accuracy', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Epoch')
         ax2.set_ylabel('Accuracy (%)')
-        ax2.legend()
+        ax2.legend().show(False)
         ax2.grid(True, alpha=0.3)
         
         # Calcola precision e recall per ogni epoca se disponibili
@@ -370,7 +370,7 @@ class ModelTrainerMulticlass:
             ax3.set_title('Model Precision', fontsize=14, fontweight='bold')
             ax3.set_xlabel('Epoch')
             ax3.set_ylabel('Precision')
-            ax3.legend()
+            ax3.legend().show(False)
             ax3.grid(True, alpha=0.3)
         else:
             ax3.text(0.5, 0.5, 'Precision data not available', 
@@ -384,7 +384,7 @@ class ModelTrainerMulticlass:
             ax4.set_title('Model Recall', fontsize=14, fontweight='bold')
             ax4.set_xlabel('Epoch')
             ax4.set_ylabel('Recall')
-            ax4.legend()
+            ax4.legend().show(False)
             ax4.grid(True, alpha=0.3)
         else:
             ax4.text(0.5, 0.5, 'Recall data not available', 
@@ -698,7 +698,7 @@ class ModelTrainerMulticlass:
         logger.info("\nTutti i grafici individuali salvati successfully!")
 
 def evaluate_model_multiclass(model, test_loader, device, class_names):
-    """Valuta il modello multiclass sul test set - ADATTATO DA BINARIO"""
+    """Valuta il modello multiclass sul test set"""
     model.eval()
     all_predictions = []
     all_targets = []

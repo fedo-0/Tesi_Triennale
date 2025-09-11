@@ -8,7 +8,6 @@ import math
 from utilities.logging_config import setup_logging
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.utils.class_weight import compute_class_weight
-from data.samplers import RandomSlidingWindowSampler
 
 # Setup logging
 setup_logging()
@@ -205,6 +204,39 @@ class NetworkTrafficTransformer(nn.Module):
         
         return output
 
+class SlidingWindowDataset(torch.utils.data.Dataset):
+    def __init__(self, X, y, window_size, seed):
+        self.X = X
+        self.y = y
+        self.window_size = window_size
+        
+        # Genera tutti gli indici possibili per le finestre
+        self.window_starts = list(range(len(X) - window_size + 1))
+        
+        # Mescola gli indici per simulare il RandomSlidingWindowSampler
+        import random
+        random.seed(seed)
+        random.shuffle(self.window_starts)
+        
+    def __len__(self):
+        return len(self.window_starts)
+    
+    def __getitem__(self, idx):
+        # Ottieni l'indice di partenza per questa finestra
+        start_idx = self.window_starts[idx]
+        end_idx = start_idx + self.window_size
+        
+        # Crea la sequenza
+        sequence = torch.FloatTensor(self.X[start_idx:end_idx])
+        target = torch.LongTensor([self.y[end_idx - 1]])[0]  # Target dell'ultimo elemento
+        
+        return sequence, target
+    
+    def reshuffle(self, seed):
+        import random
+        random.seed(seed)
+        random.shuffle(self.window_starts)
+
 
 class NetworkTrafficDatasetTransformer:
     
@@ -342,112 +374,11 @@ class NetworkTrafficDatasetTransformer:
         
         return numeric_features, categorical_features
         
-    """
     def create_dataloaders(self, window_size=8, seed=42):
         
         batch_size = self.hyperparams['batch_size']
         use_cuda = torch.cuda.is_available()
         
-        # Crea dataset base
-        train_dataset = TensorDataset(
-            torch.FloatTensor(self.X_train),
-            torch.LongTensor(self.y_train)
-        )
-        val_dataset = TensorDataset(
-            torch.FloatTensor(self.X_val),
-            torch.LongTensor(self.y_val)
-        )
-        test_dataset = TensorDataset(
-            torch.FloatTensor(self.X_test),
-            torch.LongTensor(self.y_test)
-        )
-        
-        # Crea samplers
-        train_sampler = RandomSlidingWindowSampler(train_dataset, window_size, seed)
-        val_sampler = RandomSlidingWindowSampler(val_dataset, window_size, seed + 1)
-        test_sampler = RandomSlidingWindowSampler(test_dataset, window_size, seed + 2)
-        
-        class SamplerDataLoader:
-            def __init__(self, dataset, sampler, batch_size):
-                self.dataset = dataset
-                self.sampler = sampler
-                self.batch_size = batch_size
-            
-            def __iter__(self):
-                batch_sequences = []
-                batch_targets = []
-                
-                for sequence_indices in self.sampler:
-                    # sequence_indices = [0, 1, 2, 3, 4, 5, 6, 7] dal sampler
-                    sequence = torch.stack([self.dataset[i][0] for i in sequence_indices])
-                    target = self.dataset[sequence_indices[-1]][1]
-                    
-                    batch_sequences.append(sequence)
-                    batch_targets.append(target)
-                    
-                    if len(batch_sequences) == self.batch_size:
-                        yield torch.stack(batch_sequences), torch.stack(batch_targets)
-                        batch_sequences = []
-                        batch_targets = []
-                
-                # Ultimo batch parziale se presente
-                if batch_sequences:
-                    yield torch.stack(batch_sequences), torch.stack(batch_targets)
-            
-            def __len__(self):
-                return (len(self.sampler) + self.batch_size - 1) // self.batch_size
-        
-        # Crea i DataLoader wrapper
-        train_loader = SamplerDataLoader(train_dataset, train_sampler, batch_size)
-        val_loader = SamplerDataLoader(val_dataset, val_sampler, batch_size)
-        test_loader = SamplerDataLoader(test_dataset, test_sampler, batch_size)
-        
-        logger.info(f"DataLoaders con RandomSlidingWindowSampler creati:")
-        logger.info(f"  Window size: {window_size}")
-        logger.info(f"  Train: {len(train_loader)} batch")
-        logger.info(f"  Val: {len(val_loader)} batch")
-        logger.info(f"  Test: {len(test_loader)} batch")
-        
-        return train_loader, val_loader, test_loader
-
-    """
-    def create_dataloaders(self, window_size=8, seed=42):
-        
-        batch_size = self.hyperparams['batch_size']
-        use_cuda = torch.cuda.is_available()
-        
-        class SlidingWindowDataset(torch.utils.data.Dataset):
-            def __init__(self, X, y, window_size, seed):
-                self.X = X
-                self.y = y
-                self.window_size = window_size
-                
-                # Genera tutti gli indici possibili per le finestre
-                self.window_starts = list(range(len(X) - window_size + 1))
-                
-                # Mescola gli indici per simulare il RandomSlidingWindowSampler
-                import random
-                random.seed(seed)
-                random.shuffle(self.window_starts)
-                
-            def __len__(self):
-                return len(self.window_starts)
-            
-            def __getitem__(self, idx):
-                # Ottieni l'indice di partenza per questa finestra
-                start_idx = self.window_starts[idx]
-                end_idx = start_idx + self.window_size
-                
-                # Crea la sequenza
-                sequence = torch.FloatTensor(self.X[start_idx:end_idx])
-                target = torch.LongTensor([self.y[end_idx - 1]])[0]  # Target dell'ultimo elemento
-                
-                return sequence, target
-            
-            def reshuffle(self, seed):
-                import random
-                random.seed(seed)
-                random.shuffle(self.window_starts)
         
         # Crea dataset
         train_dataset = SlidingWindowDataset(self.X_train, self.y_train, window_size, seed)

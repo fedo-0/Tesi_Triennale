@@ -11,6 +11,7 @@ from trainer.trainer_bin import main_pipeline_bin
 from trainer.trainer_multiclass import main_pipeline_multiclass
 from trainer.trainer_transformer import main_pipeline_transformer
 from data.split import clean_and_split_dataset
+from data.test import test_and_plot_mlp, test_and_plot_transformer
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -114,8 +115,14 @@ def run_all(model_size: str):
     run_multiclassifier("small")
     logger.info("✅ terminato addestramento sul dataset CIC_2018")
 
-def test_plot (trans_path: str, mlp_path: str):
+def test_plot (trans: str, mlp: str):
     logger.info("Testing and Plot delle metriche sul test set")
+    logger.info(f"Modello: {mlp}")
+    test_and_plot_mlp(mlp)
+    logger.info("✅ Terminato con successo la versione MLP")
+    logger.info(f"Modello: {trans}")
+    test_and_plot_transformer(trans)
+    logger.info("✅ Terminato con successo la versione TRANSFORMER")
 
 if __name__ == "__main__":
     parser = ArgumentParser("parser")
@@ -173,7 +180,7 @@ if __name__ == "__main__":
         ],
         defaults=["small"]
     ).register_subcommand(
-        subcommand="split",
+        subcommand="testandplot",
         arguments=["--trans", "--mlp"],
         helps=[
             "The trans path of the model.",
@@ -199,4 +206,4 @@ if __name__ == "__main__":
     elif args.subcommand == "runall":
         run_all(args.model_size)
     elif args.subcommand == "testandplot":
-        test_plot(args.trans_path, args.mlp_path)
+        test_plot(args.trans, args.mlp)
